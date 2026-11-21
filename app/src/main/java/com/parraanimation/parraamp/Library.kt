@@ -36,16 +36,15 @@ fun audioCollection(): Uri =
 
 fun loadTracks(ctx: Context): List<Track> {
     val out = mutableListOf<Track>()
-    val m = MediaStore.Audio.Media
-    val projection = arrayOf(m._ID, m.TITLE, m.ARTIST, m.ALBUM, m.DURATION)
-    val selection = "${m.IS_MUSIC} != 0 AND ${m.DURATION} > 20000"
-    ctx.contentResolver.query(audioCollection(), projection, selection, null, "${m.TITLE} COLLATE NOCASE ASC")
+    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION)
+    val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} > 20000"
+    ctx.contentResolver.query(audioCollection(), projection, selection, null, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC")
         ?.use { c ->
-            val iId = c.getColumnIndexOrThrow(m._ID)
-            val iTitle = c.getColumnIndexOrThrow(m.TITLE)
-            val iArtist = c.getColumnIndexOrThrow(m.ARTIST)
-            val iAlbum = c.getColumnIndexOrThrow(m.ALBUM)
-            val iDur = c.getColumnIndexOrThrow(m.DURATION)
+            val iId = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val iTitle = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val iArtist = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val iAlbum = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+            val iDur = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             while (c.moveToNext()) {
                 val artist = c.getString(iArtist)?.takeIf { it != "<unknown>" } ?: "Artista desconocido"
                 val album = c.getString(iAlbum)?.takeIf { it != "<unknown>" } ?: "Álbum desconocido"
