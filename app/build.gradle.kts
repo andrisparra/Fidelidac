@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.parraanimation.parraamp.hifi"
+        applicationId = "com.parrasoftware.fidelidac"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

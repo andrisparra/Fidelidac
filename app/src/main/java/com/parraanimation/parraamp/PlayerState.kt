@@ -28,9 +28,14 @@ class PlayerState {
     var shuffle by mutableStateOf(false); private set
     var repeatMode by mutableIntStateOf(Player.REPEAT_MODE_OFF); private set
     var format by mutableStateOf<Format?>(null); private set
+    var queue by mutableStateOf<List<MediaItem>>(emptyList()); private set
+    var index by mutableIntStateOf(0); private set
 
     private val listener = object : Player.Listener {
-        override fun onEvents(player: Player, events: Player.Events) = sync(player)
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED)) syncQueue(player)
+            sync(player)
+        }
     }
 
     fun connect(ctx: Context) {
@@ -42,6 +47,7 @@ class PlayerState {
             if (c != null) {
                 controller = c
                 c.addListener(listener)
+                syncQueue(c)
                 sync(c)
             }
         }, ContextCompat.getMainExecutor(ctx))
@@ -53,9 +59,14 @@ class PlayerState {
         controller = null
     }
 
+    private fun syncQueue(p: Player) {
+        queue = List(p.mediaItemCount) { p.getMediaItemAt(it) }
+    }
+
     private fun sync(p: Player) {
         isPlaying = p.isPlaying
         item = p.currentMediaItem
+        index = p.currentMediaItemIndex.coerceAtLeast(0)
         durationMs = if (p.duration == C.TIME_UNSET) 0L else p.duration
         positionMs = p.currentPosition
         shuffle = p.shuffleModeEnabled
@@ -85,10 +96,16 @@ class PlayerState {
         c.play()
     }
 
+    fun skipTo(i: Int) { controller?.let { it.seekToDefaultPosition(i); it.play() } }
+    fun removeAt(i: Int) { controller?.removeMediaItem(i) }
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
     fun next() { controller?.seekToNext() }
     fun previous() { controller?.seekToPrevious() }
     fun seekTo(ms: Long) { controller?.seekTo(ms); positionMs = ms }
+    fun seekToFraction(f: Float) {
+        val c = controller ?: return
+        if (c.duration != C.TIME_UNSET) seekTo((c.duration * f).toLong())
+    }
     fun toggleShuffle() { controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled } }
     fun cycleRepeat() {
         controller?.let {

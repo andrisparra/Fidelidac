@@ -2,13 +2,17 @@ package com.parraanimation.parraamp
 
 import android.content.ContentUris
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -23,34 +27,41 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.math.sin
 
-// ---- Paleta estilo Walkman: negro profundo, naranja de acento, dorado Hi-Res ----
+// ---- Paleta: negro profundo, naranja de acento, dorado Hi-Res ----
 val Bg = Color(0xFF0A0A0B)
 val Panel = Color(0xFF151517)
 val Accent = Color(0xFFFF6A00)
 val Gold = Color(0xFFE6C068)
 val Muted = Color(0xFF8E8E93)
+val Light = Color(0xFFD0D0D6)
 
 @Composable
 fun ParraTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Accent, background = Bg, surface = Panel,
+            primary = Light, background = Bg, surface = Panel,
             onSurface = Color.White, onBackground = Color.White
         ),
         content = content
@@ -68,7 +79,7 @@ fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequest
     BackHandler(enabled = tab == 1) { tab = 0 }
 
     val navColors = NavigationBarItemDefaults.colors(
-        selectedIconColor = Accent, selectedTextColor = Accent,
+        selectedIconColor = Light, selectedTextColor = Light,
         unselectedIconColor = Muted, unselectedTextColor = Muted,
         indicatorColor = Color.Transparent
     )
@@ -108,7 +119,7 @@ private fun LibraryScreen(
 ) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)) {
-            Text("ParraAmp", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Text("FIDELIDAC", color = Light, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
             Text("Biblioteca", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
             if (granted) Text("${tracks.size} canciones", color = Muted, fontSize = 13.sp)
         }
@@ -117,7 +128,7 @@ private fun LibraryScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Necesito acceso a tu música", color = Muted)
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                    Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Light)) {
                         Text("Dar permiso", color = Color.Black)
                     }
                 }
@@ -171,7 +182,7 @@ private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
             Text(md?.artist?.toString() ?: "", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         IconButton(onClick = { state.togglePlay() }) {
-            Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, tint = Accent)
+            Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, tint = Light)
         }
     }
 }
@@ -180,11 +191,11 @@ private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 @Composable
 private fun NowPlayingScreen(state: PlayerState) {
-    val id = state.item?.mediaId?.toLongOrNull()
-    val uri = id?.let { ContentUris.withAppendedId(audioCollection(), it) }
-    val art = rememberArt(uri)
+    val ctx = LocalContext.current
+    val uri = state.item?.mediaId?.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
+    val art = rememberArt(uri, 1000)
     val bits = rememberBitDepth(uri)
-    val md = state.item?.mediaMetadata
+    val favs = remember { Favorites(ctx) }
 
     if (state.item == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -195,129 +206,261 @@ private fun NowPlayingScreen(state: PlayerState) {
 
     Box(Modifier.fillMaxSize()) {
         if (art != null) {
-            Image(art, null, Modifier.fillMaxSize().blur(70.dp).alpha(0.35f), contentScale = ContentScale.Crop)
+            Image(art, null, Modifier.fillMaxSize().blur(70.dp).alpha(0.22f), contentScale = ContentScale.Crop)
         }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x99000000), Bg))))
-
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(Modifier.height(20.dp))
-            Text("REPRODUCIENDO", color = Muted, fontSize = 11.sp, letterSpacing = 3.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(20.dp))
-
-            Box(
-                Modifier.fillMaxWidth().aspectRatio(1f)
-                    .shadow(28.dp, RoundedCornerShape(22.dp))
-                    .clip(RoundedCornerShape(22.dp)).background(Panel),
-                contentAlignment = Alignment.Center
-            ) {
-                if (art != null) Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                else Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.size(96.dp))
-            }
-
-            Spacer(Modifier.height(24.dp))
-            Column(Modifier.fillMaxWidth()) {
-                Text(
-                    md?.title?.toString() ?: "", color = Color.White, fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+            item { PlayerTop(state, art, bits, favs) }
+            itemsIndexed(state.queue) { i, q ->
+                QueueRow(
+                    item = q, current = i == state.index,
+                    onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
                 )
-                Text(
-                    md?.artist?.toString() ?: "", color = Muted, fontSize = 16.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(10.dp))
-                QualityTags(state, bits)
             }
-
-            Spacer(Modifier.weight(1f))
-            SeekBar(state)
-            Spacer(Modifier.height(8.dp))
-            Controls(state)
-            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun QualityTags(state: PlayerState, bits: Int?) {
+private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: Favorites) {
+    val md = state.item?.mediaMetadata
+    val mediaId = state.item?.mediaId ?: ""
+    val isFav = mediaId in favs.ids
     val f = state.format
     val codec = codecName(f?.sampleMimeType)
     val lossless = codec in setOf("FLAC", "ALAC", "WAV")
     val sr = f?.sampleRate ?: -1
+    val br = f?.bitrate ?: -1
     val hiRes = lossless && (sr >= 88200 || (bits ?: 0) >= 24)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (hiRes) Tag("Hi-Res", Gold, filled = true)
-        else if (lossless) Tag("Lossless", Gold)
-        Tag(codec, Muted)
-        if (sr > 0) {
-            val khz = if (sr % 1000 == 0) "${sr / 1000} kHz" else "%.1f kHz".format(sr / 1000.0)
-            Tag(if (bits != null && bits > 0) "$khz · $bits bit" else khz, Muted)
-        }
-        val br = f?.bitrate ?: -1
-        if (!lossless && br > 0) Tag("${br / 1000} kbps", Muted)
-    }
-}
 
-@Composable
-private fun Tag(text: String, color: Color, filled: Boolean = false) {
-    val shape = RoundedCornerShape(6.dp)
-    Text(
-        text, color = if (filled) Color.Black else color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.clip(shape)
-            .then(if (filled) Modifier.background(color) else Modifier.border(1.dp, color.copy(alpha = 0.6f), shape))
-            .padding(horizontal = 7.dp, vertical = 3.dp)
-    )
-}
-
-@Composable
-private fun SeekBar(state: PlayerState) {
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
     val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
-    Slider(
-        value = frac,
-        onValueChange = { drag = it },
-        onValueChangeFinished = { drag?.let { state.seekTo((it * dur).toLong()) }; drag = null },
-        colors = SliderDefaults.colors(
-            thumbColor = Color.White, activeTrackColor = Accent,
-            inactiveTrackColor = Color.White.copy(alpha = 0.18f)
-        )
-    )
-    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(fmt((frac * dur).toLong()), color = Muted, fontSize = 12.sp)
-        Text(fmt(state.durationMs), color = Muted, fontSize = 12.sp)
+
+    Column(
+        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Carátula con etiqueta Hi-Res
+        Box(
+            Modifier.padding(horizontal = 26.dp).fillMaxWidth().aspectRatio(1f)
+                .clip(RoundedCornerShape(4.dp)).background(Panel)
+        ) {
+            if (art != null) {
+                Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.align(Alignment.Center).size(96.dp))
+            }
+            if (hiRes) {
+                Text(
+                    "Hi-Res", color = Color.Black, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(14.dp)
+                        .clip(RoundedCornerShape(6.dp)).background(Gold)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        // Tiempos y posición en la cola
+        Spacer(Modifier.height(18.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(fmt((frac * dur).toLong()), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text("${state.index + 1}/${state.queue.size}", color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text(fmt(state.durationMs), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        }
+        SeekBar(frac, state.isPlaying, mediaId.hashCode(), onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+
+        // Título, artista, álbum y corazón
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    md?.title?.toString() ?: "", color = Color.White, fontSize = 28.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    md?.artist?.toString() ?: "", color = Color.White.copy(alpha = 0.78f), fontSize = 21.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    md?.albumTitle?.toString() ?: "", color = Color.White.copy(alpha = 0.55f), fontSize = 19.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                )
+            }
+            IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
+                Icon(
+                    if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null,
+                    tint = if (isFav) Light else Light.copy(alpha = 0.8f),
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+        }
+
+        // Controles
+        Spacer(Modifier.height(22.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Rounded.Shuffle, null, tint = if (state.shuffle) Light else Light.copy(alpha = 0.4f))
+            }
+            RingButton(Icons.Rounded.SkipPrevious, 64.dp, 1.5.dp, Light.copy(alpha = 0.5f)) { state.previous() }
+            RingButton(
+                if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                90.dp, 2.5.dp, Light, iconSize = 48.dp
+            ) { state.togglePlay() }
+            RingButton(Icons.Rounded.SkipNext, 64.dp, 1.5.dp, Light.copy(alpha = 0.5f)) { state.next() }
+            IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
+                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Light.copy(alpha = 0.4f) else Light
+                )
+            }
+        }
+
+        // Formato del archivo
+        Spacer(Modifier.height(24.dp))
+        Text(formatLine(sr, br, bits, codec, lossless), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun Controls(state: PlayerState) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { state.toggleShuffle() }) {
-            Icon(Icons.Rounded.Shuffle, null, tint = if (state.shuffle) Accent else Muted)
+private fun RingButton(
+    icon: ImageVector, size: Dp, ring: Dp, ringColor: Color,
+    iconSize: Dp = size * 0.45f, onClick: () -> Unit
+) {
+    Box(
+        Modifier.size(size).clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(ring, ringColor, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, null, tint = Light, modifier = Modifier.size(iconSize))
+    }
+}
+
+private fun seekFraction(x: Float, width: Int, pad: Float): Float =
+    if (width <= 2 * pad) 0f else ((x - pad) / (width - 2 * pad)).coerceIn(0f, 1f)
+
+@Composable
+private fun SeekBar(frac: Float, playing: Boolean, seed: Int, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
+    // Forma de la onda: distinta por canción, pero fija (decorativa)
+    val base = remember(seed) {
+        val r = kotlin.random.Random(seed)
+        val raw = FloatArray(202) { r.nextFloat() }
+        FloatArray(200) { i -> 0.22f + 0.78f * ((raw[i] + 2f * raw[i + 1] + raw[i + 2]) / 4f) }
+    }
+    // Reloj de la animación: solo corre mientras suena
+    var phase by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(playing) {
+        if (playing) {
+            while (true) withFrameNanos { t -> phase = t / 1_000_000_000f }
         }
-        IconButton(onClick = { state.previous() }, modifier = Modifier.size(56.dp)) {
-            Icon(Icons.Rounded.SkipPrevious, null, tint = Color.White, modifier = Modifier.size(36.dp))
+    }
+    Canvas(
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(56.dp)
+            .pointerInput(Unit) {
+                val pad = 8.dp.toPx()
+                detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
+            }
+            .pointerInput(Unit) {
+                val pad = 8.dp.toPx()
+                var last = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
+                    onDragEnd = { onSeek(last); onDrag(null) },
+                    onDragCancel = { onDrag(null) },
+                    onHorizontalDrag = { change, _ ->
+                        last = seekFraction(change.position.x, size.width, pad)
+                        onDrag(last)
+                    }
+                )
+            }
+    ) {
+        val pad = 8.dp.toPx()
+        val w = size.width - 2 * pad
+        val count = (w / 6.dp.toPx()).toInt().coerceAtLeast(10)
+        val gap = w / count
+        val cy = size.height / 2
+        val maxH = size.height * 0.8f
+        val headPos = frac * count
+        for (i in 0 until count) {
+            val x = pad + gap * (i + 0.5f)
+            var h = base[(i * base.size) / count]
+            val played = (i + 0.5f) <= headPos
+            if (playing && played) {
+                val d = headPos - i
+                if (d <= 10f) h *= 1f + 0.35f * (1f - d / 10f) * sin(phase * 7f + i * 0.9f)
+            }
+            val half = (maxH * h.coerceAtMost(1.2f) / 2f).coerceAtLeast(2.dp.toPx())
+            drawLine(
+                if (played) Light else Color.White.copy(alpha = 0.25f),
+                Offset(x, cy - half), Offset(x, cy + half),
+                strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round
+            )
         }
-        Box(
-            Modifier.size(78.dp).clip(CircleShape).background(Accent).clickable { state.togglePlay() },
-            contentAlignment = Alignment.Center
+        val hx = pad + w * frac
+        drawLine(
+            Color.White, Offset(hx, size.height * 0.08f), Offset(hx, size.height * 0.92f),
+            strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
+    val uri = item.mediaId.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
+    val thumb = rememberArt(uri, 160)
+    var menu by remember { mutableStateOf(false) }
+    val md = item.mediaMetadata
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null,
-                tint = Color.Black, modifier = Modifier.size(42.dp)
-            )
+            Box(Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)).background(Panel), contentAlignment = Alignment.Center) {
+                if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Icon(Icons.Rounded.MusicNote, null, tint = Muted)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    md.title?.toString() ?: "", color = if (current) Accent else Color.White, fontSize = 17.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(md.artist?.toString() ?: "", color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Rounded.MoreVert, null, tint = Color.White.copy(alpha = 0.85f))
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Reproducir") }, onClick = { menu = false; onPlay() })
+                    DropdownMenuItem(text = { Text("Quitar de la cola") }, onClick = { menu = false; onRemove() })
+                }
+            }
         }
-        IconButton(onClick = { state.next() }, modifier = Modifier.size(56.dp)) {
-            Icon(Icons.Rounded.SkipNext, null, tint = Color.White, modifier = Modifier.size(36.dp))
-        }
-        IconButton(onClick = { state.cycleRepeat() }) {
-            Icon(
-                if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
-                tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Muted else Accent
-            )
-        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
+    }
+}
+
+// ------------------------------- Favoritos -------------------------------
+
+class Favorites(ctx: Context) {
+    private val prefs = ctx.getSharedPreferences("favorites", Context.MODE_PRIVATE)
+    var ids by mutableStateOf<Set<String>>(prefs.getStringSet("ids", emptySet())?.toSet() ?: emptySet())
+        private set
+
+    fun toggle(id: String) {
+        val n = ids.toMutableSet()
+        if (!n.add(id)) n.remove(id)
+        ids = n
+        prefs.edit().putStringSet("ids", n).apply()
     }
 }
 
@@ -340,22 +483,47 @@ fun codecName(mime: String?): String = when (mime) {
     else -> mime.substringAfter('/').uppercase()
 }
 
+private fun formatLine(sr: Int, br: Int, bits: Int?, codec: String, lossless: Boolean): String {
+    val rate = if (sr > 0) (if (sr % 1000 == 0) "${sr / 1000} kHz" else "%.1f kHz".format(sr / 1000.0)) else null
+    val depth = when {
+        lossless && bits != null && bits > 0 -> "$bits bit"
+        !lossless && br > 0 -> "${br / 1000} kbps"
+        else -> null
+    }
+    val left = listOfNotNull(rate, depth).joinToString(" / ")
+    return listOf(left, codec.takeIf { it != "—" } ?: "").filter { it.isNotEmpty() }.joinToString(" ")
+}
+
+private val artCache = LruCache<String, ImageBitmap>(80)
+
 @Composable
-private fun rememberArt(uri: Uri?): ImageBitmap? {
+private fun rememberArt(uri: Uri?, px: Int): ImageBitmap? {
     val ctx = LocalContext.current
-    return produceState<ImageBitmap?>(null, uri) {
-        value = if (uri == null) null else withContext(Dispatchers.IO) { loadArt(ctx, uri) }
+    return produceState<ImageBitmap?>(uri?.let { artCache.get("$it@$px") }, uri, px) {
+        value = if (uri == null) null else {
+            val key = "$uri@$px"
+            val cached = artCache.get(key)
+            if (cached != null) cached else {
+                val loaded = withContext(Dispatchers.IO) { loadArt(ctx, uri, px) }
+                if (loaded != null && px <= 256) artCache.put(key, loaded)
+                loaded
+            }
+        }
     }.value
 }
 
-private fun loadArt(ctx: Context, uri: Uri): ImageBitmap? = runCatching {
+private fun loadArt(ctx: Context, uri: Uri, px: Int): ImageBitmap? = runCatching {
     if (Build.VERSION.SDK_INT >= 29) {
-        ctx.contentResolver.loadThumbnail(uri, Size(1000, 1000), null).asImageBitmap()
+        ctx.contentResolver.loadThumbnail(uri, Size(px, px), null).asImageBitmap()
     } else {
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(ctx, uri)
-            r.embeddedPicture?.let { BitmapFactory.decodeByteArray(it, 0, it.size).asImageBitmap() }
+            r.embeddedPicture?.let {
+                var bmp: Bitmap = BitmapFactory.decodeByteArray(it, 0, it.size)
+                if (bmp.width > px * 2) bmp = Bitmap.createScaledBitmap(bmp, px, px, true)
+                bmp.asImageBitmap()
+            }
         } finally { r.release() }
     }
 }.getOrNull()
