@@ -9,6 +9,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.BackHandler
@@ -75,28 +76,44 @@ fun ParraTheme(content: @Composable () -> Unit) {
     )
 }
 
+private enum class Screen { HOME, SONGS, PLAYER }
+
 @Composable
 fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequestPermission: () -> Unit) {
-    var tab by remember { mutableIntStateOf(0) }
+    val ctx = LocalContext.current
+    val stack = remember { mutableStateListOf(Screen.HOME) }
+    val screen = stack.last()
+    val go: (Screen) -> Unit = { s -> if (stack.last() != s) stack.add(s) }
+    val toast: (String) -> Unit = { msg -> Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() }
 
     LaunchedEffect(state.isPlaying) {
         while (state.isPlaying) { state.refreshPosition(); delay(250) }
         state.refreshPosition()
     }
-    // Volver a la biblioteca: con la barra o el gesto de retroceso del sistema
-    BackHandler(enabled = tab == 1) { tab = 0 }
+    // Volver atrás: con la barra o el gesto de retroceso del sistema
+    BackHandler(enabled = stack.size > 1) { stack.removeAt(stack.lastIndex) }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Box(Modifier.weight(1f)) {
-            if (tab == 0) {
-                LibraryScreen(tracks, granted, state, onRequestPermission) { index ->
-                    state.play(tracks, index); tab = 1
+            when (screen) {
+                Screen.HOME -> HomeScreen(
+                    state = state, tracks = tracks,
+                    onAllSongs = { go(Screen.SONGS) },
+                    onQueue = { if (state.item != null) go(Screen.PLAYER) else toast("No hay música en cola") },
+                    onRandomFm = {
+                        if (tracks.isEmpty()) toast("No hay canciones para reproducir")
+                        else { state.playRandom(tracks); go(Screen.PLAYER) }
+                    },
+                    onSoon = { name -> toast("$name: disponible en la próxima actualización") }
+                )
+                Screen.SONGS -> LibraryScreen(tracks, granted, state, onRequestPermission) { index ->
+                    state.play(tracks, index); go(Screen.PLAYER)
                 }
-            } else {
-                NowPlayingScreen(state)
+                Screen.PLAYER -> NowPlayingScreen(state)
             }
         }
-        if (tab == 0 && state.item != null) MiniPlayer(state) { tab = 1 }
+        // El mini reproductor solo aparece si hay algo cargado
+        if (screen != Screen.PLAYER && state.item != null) MiniPlayer(state) { go(Screen.PLAYER) }
     }
 }
 
@@ -111,7 +128,7 @@ private fun LibraryScreen(
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)) {
             Text("FIDELIDAC", color = Light, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-            Text("Biblioteca", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
+            Text("Todas las canciones", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
             if (granted) Text("${tracks.size} canciones", color = Muted, fontSize = 13.sp)
         }
         when {
@@ -165,19 +182,39 @@ private fun TrackRow(t: Track, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
+internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
     val md = state.item?.mediaMetadata
-    Row(
-        Modifier.fillMaxWidth().background(Panel).clickable(onClick = onOpen)
-            .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val uri = state.item?.mediaId?.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
+    val thumb = rememberArt(uri, 160)
+    val frac = (state.positionMs.toFloat() / state.durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+            .background(Color(0xFF2A2A2A))
+            .clickable(onClick = onOpen)
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(md?.title?.toString() ?: "", color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(md?.artist?.toString() ?: "", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.fillMaxWidth().height(2.dp).background(Color.White.copy(alpha = 0.08f))) {
+            Box(Modifier.fillMaxWidth(frac).height(2.dp).background(BadgeText))
         }
-        IconButton(onClick = { state.togglePlay() }) {
-            Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, tint = Light)
+        Row(
+            Modifier.navigationBarsPadding().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(Panel), contentAlignment = Alignment.Center) {
+                if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Icon(Icons.Rounded.MusicNote, null, tint = Muted)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(md?.title?.toString() ?: "", color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(md?.artist?.toString() ?: "", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = { state.togglePlay() }) {
+                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, tint = Light)
+            }
+            IconButton(onClick = { state.next() }) {
+                Icon(Icons.Rounded.SkipNext, null, tint = Light)
+            }
         }
     }
 }
@@ -647,7 +684,7 @@ private fun rememberArt(uri: Uri?, px: Int): ImageBitmap? {
     }.value
 }
 
-private fun loadArt(ctx: Context, uri: Uri, px: Int): ImageBitmap? = runCatching {
+internal fun loadArt(ctx: Context, uri: Uri, px: Int): ImageBitmap? = runCatching {
     if (Build.VERSION.SDK_INT >= 29) {
         ctx.contentResolver.loadThumbnail(uri, Size(px, px), null).asImageBitmap()
     } else {

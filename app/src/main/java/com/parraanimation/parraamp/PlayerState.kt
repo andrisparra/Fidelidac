@@ -96,6 +96,17 @@ class PlayerState {
         c.play()
     }
 
+    // Aleatorio FM: toda la biblioteca en orden aleatorio, sin fin
+    fun playRandom(tracks: List<Track>) {
+        val c = controller ?: return
+        if (tracks.isEmpty()) return
+        c.shuffleModeEnabled = true
+        c.repeatMode = Player.REPEAT_MODE_ALL
+        c.setMediaItems(tracks.map { it.toMediaItem() }, tracks.indices.random(), 0L)
+        c.prepare()
+        c.play()
+    }
+
     fun skipTo(i: Int) { controller?.let { it.seekToDefaultPosition(i); it.play() } }
     fun removeAt(i: Int) { controller?.removeMediaItem(i) }
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
