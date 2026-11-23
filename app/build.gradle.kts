@@ -12,10 +12,28 @@ android {
         applicationId = "com.parrasoftware.fidelidac"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0"
     }
+    // Firma fija: la clave la crea y guarda GitHub (rama "signing") y se reutiliza en cada compilación
+    signingConfigs {
+        create("fixed") {
+            val ks = System.getenv("KEYSTORE_PATH")
+            val pw = System.getenv("SIGNING_PASSWORD")
+            if (ks != null && pw != null) {
+                storeFile = file(ks)
+                storePassword = pw
+                keyAlias = "fidelidac"
+                keyPassword = pw
+            }
+        }
+    }
     buildTypes {
+        getByName("debug") {
+            if (System.getenv("KEYSTORE_PATH") != null) {
+                signingConfig = signingConfigs.getByName("fixed")
+            }
+        }
         release { isMinifyEnabled = false }
     }
     compileOptions {

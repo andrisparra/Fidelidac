@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,10 +14,42 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Clave de firma fija
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if [ -z "$SIGNING_PASSWORD" ]; then
+            echo "Falta el secreto SIGNING_PASSWORD (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          KS="$RUNNER_TEMP/fidelidac.jks"
+          if git ls-remote --exit-code --heads origin signing >/dev/null 2>&1; then
+            git fetch --depth=1 origin signing
+            git show FETCH_HEAD:fidelidac.jks > "$KS"
+          else
+            keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias fidelidac \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -storepass "$SIGNING_PASSWORD" -keypass "$SIGNING_PASSWORD" \
+              -dname "CN=Fidelidac, O=Parra Software, C=PA"
+            D="$(mktemp -d)"
+            cp "$KS" "$D/fidelidac.jks"
+            git -C "$D" init -q -b signing
+            git -C "$D" config user.name "fidelidac-bot"
+            git -C "$D" config user.email "fidelidac-bot@users.noreply.github.com"
+            git -C "$D" add fidelidac.jks
+            git -C "$D" commit -q -m "Clave de firma de Fidelidac"
+            git -C "$D" push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" signing
+          fi
+          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - run: gradle assembleDebug --no-daemon
+      - name: Compilar
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: Fidelidac-debug
