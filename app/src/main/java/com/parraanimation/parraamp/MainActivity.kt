@@ -6,6 +6,11 @@ import android.graphics.Color as AColor
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.delay
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,7 +32,24 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT)
         )
         state.connect(this)
-        setContent { ParraTheme { Root(state) } }
+        setContent {
+            ParraTheme {
+                var showSplash by rememberSaveable { mutableStateOf(true) }
+                LaunchedEffect(Unit) {
+                    if (showSplash) {
+                        delay(1800)
+                        showSplash = false
+                    }
+                }
+                Crossfade(
+                    targetState = showSplash,
+                    animationSpec = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+                    label = "splash"
+                ) { splash ->
+                    if (splash) SplashScreen() else Root(state)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
