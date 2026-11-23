@@ -13,7 +13,8 @@ data class Track(
     val title: String,
     val artist: String,
     val album: String,
-    val durationMs: Long
+    val durationMs: Long,
+    val mime: String? = null
 ) {
     val uri: Uri get() = ContentUris.withAppendedId(audioCollection(), id)
 
@@ -36,7 +37,7 @@ fun audioCollection(): Uri =
 
 fun loadTracks(ctx: Context): List<Track> {
     val out = mutableListOf<Track>()
-    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION)
+    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION, MediaStore.Audio.Media.MIME_TYPE)
     val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} > 20000"
     ctx.contentResolver.query(audioCollection(), projection, selection, null, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC")
         ?.use { c ->
@@ -45,10 +46,11 @@ fun loadTracks(ctx: Context): List<Track> {
             val iArtist = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val iAlbum = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
             val iDur = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val iMime = c.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
             while (c.moveToNext()) {
                 val artist = c.getString(iArtist)?.takeIf { it != "<unknown>" } ?: "Artista desconocido"
                 val album = c.getString(iAlbum)?.takeIf { it != "<unknown>" } ?: "Álbum desconocido"
-                out += Track(c.getLong(iId), c.getString(iTitle) ?: "Sin título", artist, album, c.getLong(iDur))
+                out += Track(c.getLong(iId), c.getString(iTitle) ?: "Sin título", artist, album, c.getLong(iDur), c.getString(iMime))
             }
         }
     return out

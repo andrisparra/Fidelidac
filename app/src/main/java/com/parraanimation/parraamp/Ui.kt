@@ -4,6 +4,8 @@ import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -147,6 +149,7 @@ private fun LibraryScreen(
 
 @Composable
 private fun TrackRow(t: Track, selected: Boolean, onClick: () -> Unit) {
+    val info = rememberAudioInfo(t.id, t.mime)
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -159,10 +162,15 @@ private fun TrackRow(t: Track, selected: Boolean, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                t.title, color = if (selected) Accent else Color.White, fontSize = 15.sp,
-                fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    t.title, color = if (selected) Accent else Color.White, fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(8.dp))
+                QualityChip(info)
+            }
             Text("${t.artist} · ${t.album}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
@@ -225,12 +233,12 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
     val md = state.item?.mediaMetadata
     val mediaId = state.item?.mediaId ?: ""
     val isFav = mediaId in favs.ids
-    val f = state.format
-    val codec = codecName(f?.sampleMimeType)
-    val lossless = codec in setOf("FLAC", "ALAC", "WAV")
-    val sr = f?.sampleRate ?: -1
-    val br = f?.bitrate ?: -1
-    val hiRes = lossless && (sr >= 88200 || (bits ?: 0) >= 24)
+    val probed = rememberAudioInfo(state.item?.mediaId?.toLongOrNull(), null)
+    val live = state.format
+    val liveMime = live?.sampleMimeType
+    val info: AudioInfo? = if (live != null && liveMime != null)
+        AudioInfo(codecName(liveMime), losslessMime(liveMime) ?: false, live.sampleRate, probed?.bits ?: bits, live.bitrate)
+    else probed
 
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
@@ -250,24 +258,22 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
             } else {
                 Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.align(Alignment.Center).size(96.dp))
             }
-            if (hiRes) {
-                Text(
-                    "Hi-Res", color = Color.Black, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(14.dp)
-                        .clip(RoundedCornerShape(6.dp)).background(Gold)
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
         }
 
+        // Etiquetas de calidad bajo la carátula
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth().padding(horizontal = 26.dp).heightIn(min = 34.dp), contentAlignment = Alignment.CenterStart) {
+            if (info != null) QualityTags(info)
+        }
+        Spacer(Modifier.height(16.dp))
+
         // Tiempos y posición en la cola
-        Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(fmt((frac * dur).toLong()), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
             Text("${state.index + 1}/${state.queue.size}", color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
             Text(fmt(state.durationMs), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
         }
-        SeekBar(frac, state.isPlaying, mediaId.hashCode(), onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+        SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
 
         // Título, artista, álbum y corazón
         Spacer(Modifier.height(6.dp))
@@ -321,9 +327,6 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
             }
         }
 
-        // Formato del archivo
-        Spacer(Modifier.height(24.dp))
-        Text(formatLine(sr, br, bits, codec, lossless), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -348,22 +351,9 @@ private fun seekFraction(x: Float, width: Int, pad: Float): Float =
     if (width <= 2 * pad) 0f else ((x - pad) / (width - 2 * pad)).coerceIn(0f, 1f)
 
 @Composable
-private fun SeekBar(frac: Float, playing: Boolean, seed: Int, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
-    // Forma de la onda: distinta por canción, pero fija (decorativa)
-    val base = remember(seed) {
-        val r = kotlin.random.Random(seed)
-        val raw = FloatArray(202) { r.nextFloat() }
-        FloatArray(200) { i -> 0.22f + 0.78f * ((raw[i] + 2f * raw[i + 1] + raw[i + 2]) / 4f) }
-    }
-    // Reloj de la animación: solo corre mientras suena
-    var phase by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(playing) {
-        if (playing) {
-            while (true) withFrameNanos { t -> phase = t / 1_000_000_000f }
-        }
-    }
+private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(56.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(36.dp)
             .pointerInput(Unit) {
                 val pad = 8.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
@@ -384,31 +374,11 @@ private fun SeekBar(frac: Float, playing: Boolean, seed: Int, onDrag: (Float?) -
     ) {
         val pad = 8.dp.toPx()
         val w = size.width - 2 * pad
-        val count = (w / 6.dp.toPx()).toInt().coerceAtLeast(10)
-        val gap = w / count
-        val cy = size.height / 2
-        val maxH = size.height * 0.8f
-        val headPos = frac * count
-        for (i in 0 until count) {
-            val x = pad + gap * (i + 0.5f)
-            var h = base[(i * base.size) / count]
-            val played = (i + 0.5f) <= headPos
-            if (playing && played) {
-                val d = headPos - i
-                if (d <= 10f) h *= 1f + 0.35f * (1f - d / 10f) * sin(phase * 7f + i * 0.9f)
-            }
-            val half = (maxH * h.coerceAtMost(1.2f) / 2f).coerceAtLeast(2.dp.toPx())
-            drawLine(
-                if (played) Light else Color.White.copy(alpha = 0.25f),
-                Offset(x, cy - half), Offset(x, cy + half),
-                strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round
-            )
-        }
-        val hx = pad + w * frac
-        drawLine(
-            Color.White, Offset(hx, size.height * 0.08f), Offset(hx, size.height * 0.92f),
-            strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round
-        )
+        val y = size.height / 2
+        val x = pad + w * frac
+        drawLine(Color.White.copy(alpha = 0.18f), Offset(pad, y), Offset(pad + w, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawCircle(Color.White, radius = 8.dp.toPx(), center = Offset(x, y))
     }
 }
 
@@ -418,6 +388,7 @@ private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRe
     val thumb = rememberArt(uri, 160)
     var menu by remember { mutableStateOf(false) }
     val md = item.mediaMetadata
+    val info = rememberAudioInfo(item.mediaId.toLongOrNull(), null)
     Column {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 14.dp, vertical = 10.dp),
@@ -429,10 +400,14 @@ private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRe
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    md.title?.toString() ?: "", color = if (current) Accent else Color.White, fontSize = 17.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        md.title?.toString() ?: "", color = if (current) Accent else Color.White, fontSize = 17.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    QualityChip(info)
+                }
                 Text(md.artist?.toString() ?: "", color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box {
@@ -477,7 +452,11 @@ fun codecName(mime: String?): String = when (mime) {
     "audio/mpeg" -> "MP3"
     "audio/mp4a-latm" -> "AAC"
     "audio/alac" -> "ALAC"
-    "audio/raw" -> "WAV"
+    "audio/raw", "audio/wav", "audio/x-wav" -> "WAV"
+    "audio/aiff", "audio/x-aiff" -> "AIFF"
+    "audio/x-flac" -> "FLAC"
+    "audio/aac" -> "AAC"
+    "audio/ogg" -> "OGG"
     "audio/vorbis" -> "OGG"
     "audio/opus" -> "OPUS"
     else -> mime.substringAfter('/').uppercase()
@@ -492,6 +471,154 @@ private fun formatLine(sr: Int, br: Int, bits: Int?, codec: String, lossless: Bo
     }
     val left = listOfNotNull(rate, depth).joinToString(" / ")
     return listOf(left, codec.takeIf { it != "—" } ?: "").filter { it.isNotEmpty() }.joinToString(" ")
+}
+
+// ------------------------- Calidad del audio -------------------------
+
+data class AudioInfo(val codec: String, val lossless: Boolean, val sampleRate: Int, val bits: Int?, val bitrate: Int) {
+    // Hi-Res: sin pérdida y por encima de calidad CD (24 bit o 88.2 kHz o más)
+    val hiRes: Boolean get() = lossless && (sampleRate >= 88200 || (bits ?: 0) >= 24)
+}
+
+enum class Quality { HIRES, LOSSLESS, LOSSY }
+
+val AudioInfo.quality: Quality
+    get() = when {
+        hiRes -> Quality.HIRES
+        lossless -> Quality.LOSSLESS
+        else -> Quality.LOSSY
+    }
+
+private val TagGold = Color(0xFFF0D46E)
+
+fun losslessMime(mime: String?): Boolean? = when (mime) {
+    null -> null
+    "audio/flac", "audio/x-flac", "audio/alac", "audio/raw", "audio/wav", "audio/x-wav",
+    "audio/aiff", "audio/x-aiff" -> true
+    "audio/mpeg", "audio/mp4a-latm", "audio/aac", "audio/vorbis", "audio/opus", "audio/ogg",
+    "audio/x-ms-wma", "audio/amr" -> false
+    else -> null
+}
+
+private fun hintInfo(mime: String?): AudioInfo? {
+    val l = losslessMime(mime) ?: return null
+    return AudioInfo(codecName(mime), l, -1, null, -1)
+}
+
+private val infoCache = LruCache<Long, AudioInfo>(3000)
+
+@Composable
+private fun rememberAudioInfo(id: Long?, hintMime: String?): AudioInfo? {
+    val ctx = LocalContext.current
+    return produceState<AudioInfo?>(id?.let { infoCache.get(it) } ?: hintInfo(hintMime), id) {
+        if (id != null) {
+            val cached = infoCache.get(id)
+            if (cached != null) {
+                value = cached
+            } else {
+                val loaded = withContext(Dispatchers.IO) {
+                    probeAudio(ctx, ContentUris.withAppendedId(audioCollection(), id))
+                }
+                if (loaded != null) {
+                    infoCache.put(id, loaded)
+                    value = loaded
+                }
+            }
+        }
+    }.value
+}
+
+private fun probeBits(ctx: Context, uri: Uri): Int? {
+    if (Build.VERSION.SDK_INT < 31) return null
+    return runCatching {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, uri)
+            r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
+        } finally { r.release() }
+    }.getOrNull()
+}
+
+private fun probeAudio(ctx: Context, uri: Uri): AudioInfo? = runCatching {
+    val ex = MediaExtractor()
+    try {
+        ex.setDataSource(ctx, uri, null)
+        var fmt: MediaFormat? = null
+        for (i in 0 until ex.trackCount) {
+            val f = ex.getTrackFormat(i)
+            if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) { fmt = f; break }
+        }
+        val f = fmt
+        if (f == null) null else {
+            val mime = f.getString(MediaFormat.KEY_MIME)
+            val sr = if (f.containsKey(MediaFormat.KEY_SAMPLE_RATE)) f.getInteger(MediaFormat.KEY_SAMPLE_RATE) else -1
+            val br = if (f.containsKey(MediaFormat.KEY_BIT_RATE)) f.getInteger(MediaFormat.KEY_BIT_RATE) else -1
+            AudioInfo(codecName(mime), losslessMime(mime) ?: false, sr, probeBits(ctx, uri), br)
+        }
+    } finally { ex.release() }
+}.getOrNull()
+
+private fun rateText(sr: Int): String? = when {
+    sr <= 0 -> null
+    sr % 1000 == 0 -> "${sr / 1000} kHz"
+    else -> String.format(java.util.Locale.US, "%.1f kHz", sr / 1000.0)
+}
+
+// Etiquetas grandes bajo la carátula
+@Composable
+private fun QualityTags(info: AudioInfo) {
+    val bitsText = info.bits?.takeIf { it > 0 && info.lossless }?.let { "$it bit" }
+    val detail = (listOfNotNull(rateText(info.sampleRate), bitsText).joinToString(" / ") + " " + info.codec).trim()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        when (info.quality) {
+            Quality.HIRES -> {
+                Text(
+                    "Hi-\nRes", color = TagGold, fontSize = 13.sp, lineHeight = 13.sp,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                    modifier = Modifier.border(1.5.dp, TagGold, RoundedCornerShape(2.dp))
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+                OutlinedTag(detail)
+            }
+            Quality.LOSSLESS -> {
+                OutlinedTag("LOSSLESS")
+                Text(detail, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            }
+            Quality.LOSSY -> {
+                Text("LOSSY", color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(detail, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OutlinedTag(text: String) {
+    Text(
+        text, color = TagGold, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.border(1.5.dp, TagGold, RoundedCornerShape(2.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
+}
+
+// Etiqueta pequeña para las listas
+@Composable
+private fun QualityChip(info: AudioInfo?) {
+    if (info == null) return
+    when (info.quality) {
+        Quality.HIRES -> SmallBox("Hi-Res")
+        Quality.LOSSLESS -> SmallBox("LOSSLESS")
+        Quality.LOSSY -> Text("LOSSY", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun SmallBox(text: String) {
+    Text(
+        text, color = TagGold, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.border(1.dp, TagGold, RoundedCornerShape(2.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+    )
 }
 
 private val artCache = LruCache<String, ImageBitmap>(80)
