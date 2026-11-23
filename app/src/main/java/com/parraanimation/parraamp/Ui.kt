@@ -18,6 +18,10 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +39,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -43,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -221,7 +227,8 @@ internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 // ------------------------------ Reproduciendo ------------------------------
 
-private val PlayerBg = Color(0xFF161616)
+private val PlayerBg = Color(0xFF000000)
+private val PlayerGold = Color(0xFFF2C65A)
 private val SoftGray = Color(0xFF8E8E93)
 
 @Composable
@@ -240,13 +247,16 @@ private fun NowPlayingScreen(state: PlayerState) {
         return
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().background(PlayerBg),
-        contentPadding = PaddingValues(bottom = 24.dp + navBottom)
+    // Todo el contenido se desliza: arriba el reproductor y abajo la cola en cuadrícula de 4 columnas
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        modifier = Modifier.fillMaxSize().background(PlayerBg),
+        contentPadding = PaddingValues(bottom = 24.dp + navBottom),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        item { PlayerTop(state, art, bits, favs) }
+        item(span = { GridItemSpan(maxLineSpan) }) { PlayerTop(state, art, bits, favs) }
         itemsIndexed(state.queue) { i, q ->
-            QueueRow(
+            QueueCard(
                 item = q, current = i == state.index,
                 onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
             )
@@ -269,41 +279,39 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
     val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
-    val timeColor = Color(0xFFCFC9BE)
+    val timeColor = Color(0xFFC4C4C4)
 
     Column(
         Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Carátula
+        // Carátula (con la insignia Hi-Res Audio solo si la canción es Hi-Res)
         Box(
-            Modifier.padding(horizontal = 40.dp).fillMaxWidth().aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp)).background(Panel)
+            Modifier.padding(horizontal = 28.dp).fillMaxWidth().aspectRatio(1f)
+                .clip(RoundedCornerShape(8.dp)).background(Panel)
         ) {
             if (art != null) {
                 Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
                 Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.align(Alignment.Center).size(96.dp))
             }
+            if (info?.hiRes == true) {
+                HiResAudioBadge(Modifier.align(Alignment.BottomStart).padding(start = 13.dp, bottom = 9.dp))
+            }
         }
 
-        // Etiqueta de calidad (izquierda) y datos del archivo (derecha)
-        Spacer(Modifier.height(10.dp))
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 40.dp).heightIn(min = 36.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Datos del archivo
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.fillMaxWidth().heightIn(min = 22.dp), contentAlignment = Alignment.Center) {
             if (info != null) {
-                QualityBadge(info, 15.sp)
                 Text(
                     detailText(info),
-                    color = if (info.quality == Quality.LOSSY) Color(0xFFBDBDBD) else BadgeText,
-                    fontSize = 14.sp, fontWeight = FontWeight.Medium
+                    color = if (info.hiRes) PlayerGold else Color(0xFF9A9A9A),
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold
                 )
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
         // Tiempos y posición en la cola
         Row(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -314,11 +322,11 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
         SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
 
         // Título, artista, álbum y corazón
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Box(Modifier.fillMaxWidth().padding(horizontal = 40.dp)) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    md?.title?.toString() ?: "", color = Color.White, fontSize = 24.sp,
+                    md?.title?.toString() ?: "", color = Color(0xFFEDEDED), fontSize = 24.sp, fontWeight = FontWeight.Medium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(4.dp))
@@ -327,84 +335,108 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
                 Text(
-                    md?.albumTitle?.toString() ?: "", color = Color(0xFF7C7C80), fontSize = 18.sp,
+                    md?.albumTitle?.toString() ?: "", color = Color(0xFF7C7C80), fontSize = 20.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
             }
             IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
                 Icon(
                     if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
-                    tint = if (isFav) BadgeText else Color(0xFFE6E6E6),
+                    tint = if (isFav) PlayerGold else Color(0xFFBDBDBD),
                     modifier = Modifier.size(30.dp)
                 )
             }
         }
 
         // Controles
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(16.dp))
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 30.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(44.dp)) {
                 Icon(
-                    Icons.Outlined.Shuffle, null,
-                    tint = if (state.shuffle) BadgeText else Color(0xFFB8B8B8), modifier = Modifier.size(28.dp)
+                    Icons.Rounded.Shuffle, null,
+                    tint = if (state.shuffle) Color(0xFFE6E6E6) else Color(0xFF7A7A7A),
+                    modifier = Modifier.size(28.dp)
                 )
             }
-            CircleButton(Icons.Outlined.SkipPrevious) { state.previous() }
+            SkipButton(Icons.Rounded.SkipPrevious) { state.previous() }
             PlayButton(state.isPlaying) { state.togglePlay() }
-            CircleButton(Icons.Outlined.SkipNext) { state.next() }
+            SkipButton(Icons.Rounded.SkipNext) { state.next() }
             IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(44.dp)) {
                 Icon(
-                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat, null,
-                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color(0xFFB8B8B8) else BadgeText,
+                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
+                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color(0xFF7A7A7A) else Color(0xFFE6E6E6),
                     modifier = Modifier.size(28.dp)
                 )
             }
         }
-        Spacer(Modifier.height(32.dp))
+
+        // Marca
+        Spacer(Modifier.height(34.dp))
+        Image(
+            painter = painterResource(R.drawable.home_logo),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(PlayerGold),
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier.width(54.dp)
+        )
+        Spacer(Modifier.height(28.dp))
+    }
+}
+
+// Insignia "Hi-Res AUDIO" de diseño propio. Si consigues la licencia del logo oficial,
+// se puede reemplazar por su arte.
+@Composable
+private fun HiResAudioBadge(modifier: Modifier = Modifier) {
+    val gold = Color(0xFFE2B84B)
+    val shape = RoundedCornerShape(2.dp)
+    Column(modifier.size(46.dp).clip(shape).background(Color(0xFF151515)).border(1.5.dp, gold, shape)) {
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                "Hi·Res", color = Color(0xFFF4EBD0), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                maxLines = 1, softWrap = false
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(16.dp).background(gold), contentAlignment = Alignment.Center) {
+            Text(
+                "AUDIO", color = Color(0xFF2B2108), fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.sp, maxLines = 1, softWrap = false
+            )
+        }
     }
 }
 
 @Composable
-private fun CircleButton(icon: ImageVector, onClick: () -> Unit) {
+private fun SkipButton(icon: ImageVector, onClick: () -> Unit) {
     Box(
-        Modifier.size(52.dp).clip(CircleShape).background(Color(0xFF262626))
-            .border(1.dp, Color(0xFF3E3E3E), CircleShape)
+        Modifier.size(50.dp).clip(CircleShape).background(Color(0xFF2A2A2A))
+            .border(2.dp, Color(0xFF5C5C5C), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color(0xFFCFCFCF), modifier = Modifier.size(26.dp))
+        Icon(icon, null, tint = Color(0xFFD6D6D6), modifier = Modifier.size(26.dp))
     }
 }
 
 @Composable
 private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(80.dp)
-            .shadow(14.dp, CircleShape, ambientColor = BadgeGold.copy(alpha = 0.6f), spotColor = BadgeGold.copy(alpha = 0.6f))
-            .clip(CircleShape).background(Color(0xFF1F1D1A))
-            .border(1.dp, Color(0xFF4A4233), CircleShape),
+        Modifier.size(70.dp).clip(CircleShape).background(Color(0xFF2A2A2A))
+            .border(3.dp, Color(0xFFC9C9C9), CircleShape)
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            Modifier.size(64.dp).clip(CircleShape)
-                .background(Brush.verticalGradient(listOf(Color(0xFF3A362E), Color(0xFF1C1B19))))
-                .border(2.dp, Brush.verticalGradient(listOf(Color(0xFFEAD8A4), Color(0xFFA6874A))), CircleShape)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center
-        ) {
-            if (playing) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repeat(2) {
-                        Box(Modifier.size(width = 5.dp, height = 22.dp).clip(RoundedCornerShape(3.dp)).background(BadgeText))
-                    }
+        if (playing) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                repeat(2) {
+                    Box(Modifier.size(width = 7.dp, height = 24.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFFD9D9D9)))
                 }
-            } else {
-                Icon(Icons.Rounded.PlayArrow, null, tint = BadgeText, modifier = Modifier.size(34.dp))
             }
+        } else {
+            Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFFD9D9D9), modifier = Modifier.size(36.dp))
         }
     }
 }
@@ -415,13 +447,13 @@ private fun seekFraction(x: Float, width: Int, pad: Float): Float =
 @Composable
 private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 30.dp).height(36.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 33.dp).height(36.dp)
             .pointerInput(Unit) {
-                val pad = 10.dp.toPx()
+                val pad = 7.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
             }
             .pointerInput(Unit) {
-                val pad = 10.dp.toPx()
+                val pad = 7.dp.toPx()
                 var last = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
@@ -434,60 +466,50 @@ private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Un
                 )
             }
     ) {
-        val pad = 10.dp.toPx()
+        val pad = 7.dp.toPx()
         val w = size.width - 2 * pad
         val y = size.height / 2
         val x = pad + w * frac
-        drawLine(Color.White.copy(alpha = 0.14f), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-        if (x > pad + 1f) {
-            drawLine(
-                brush = Brush.horizontalGradient(listOf(Color(0xFF8C7A4E), Color(0xFFF1E3B6)), startX = pad, endX = x),
-                start = Offset(pad, y), end = Offset(x, y), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round
-            )
-        }
-        drawCircle(Color(0x33E6CB86), radius = 15.dp.toPx(), center = Offset(x, y))
-        drawCircle(Color(0xFFD9D9D9), radius = 8.dp.toPx(), center = Offset(x, y))
-        drawCircle(Color.White.copy(alpha = 0.55f), radius = 8.dp.toPx(), center = Offset(x, y), style = Stroke(width = 1.dp.toPx()))
+        drawLine(Color(0xFF333333), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.5.dp.toPx(), cap = StrokeCap.Round)
+        drawCircle(Color.White, radius = 6.5.dp.toPx(), center = Offset(x, y))
+        drawCircle(Color(0xFFB5B5B5), radius = 6.5.dp.toPx(), center = Offset(x, y), style = Stroke(width = 1.dp.toPx()))
     }
 }
 
+// Tarjeta de la cola: portada con esquinas redondeadas, título y artista.
+// Toque = reproducir. Mantener pulsado = menú (reproducir / quitar de la cola).
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
+private fun QueueCard(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
     val uri = item.mediaId.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
-    val thumb = rememberArt(uri, 200)
+    val thumb = rememberArt(uri, 240)
     var menu by remember { mutableStateOf(false) }
     val md = item.mediaMetadata
-    val info = rememberAudioInfo(item.mediaId.toLongOrNull(), null)
-    Column {
-        Row(
-            Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)).background(Panel), contentAlignment = Alignment.Center) {
+    Box(Modifier.padding(horizontal = 7.dp)) {
+        Column(Modifier.fillMaxWidth().combinedClickable(onClick = onPlay, onLongClick = { menu = true })) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(Panel),
+                contentAlignment = Alignment.Center
+            ) {
                 if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Icon(Icons.Rounded.MusicNote, null, tint = Muted)
             }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.padding(start = 9.dp, top = 8.dp, end = 2.dp)) {
                 Text(
-                    md.title?.toString() ?: "", color = if (current) BadgeText else Color.White, fontSize = 18.sp,
+                    md.title?.toString() ?: "", color = if (current) PlayerGold else Color.White,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    md.artist?.toString() ?: "", color = SoftGray, fontSize = 10.5.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
-                Text(md.artist?.toString() ?: "", color = SoftGray, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.width(8.dp))
-            QualityBadge(info, 12.sp)
-            Box {
-                IconButton(onClick = { menu = true }) {
-                    Icon(Icons.Rounded.MoreVert, null, tint = Color.White.copy(alpha = 0.85f))
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Reproducir") }, onClick = { menu = false; onPlay() })
-                    DropdownMenuItem(text = { Text("Quitar de la cola") }, onClick = { menu = false; onRemove() })
-                }
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Reproducir") }, onClick = { menu = false; onPlay() })
+            DropdownMenuItem(text = { Text("Quitar de la cola") }, onClick = { menu = false; onRemove() })
+        }
     }
 }
 
