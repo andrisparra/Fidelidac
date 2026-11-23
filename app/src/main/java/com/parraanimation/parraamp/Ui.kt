@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,11 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -42,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
@@ -78,13 +83,8 @@ fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequest
         while (state.isPlaying) { state.refreshPosition(); delay(250) }
         state.refreshPosition()
     }
+    // Volver a la biblioteca: con la barra o el gesto de retroceso del sistema
     BackHandler(enabled = tab == 1) { tab = 0 }
-
-    val navColors = NavigationBarItemDefaults.colors(
-        selectedIconColor = Light, selectedTextColor = Light,
-        unselectedIconColor = Muted, unselectedTextColor = Muted,
-        indicatorColor = Color.Transparent
-    )
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Box(Modifier.weight(1f)) {
@@ -97,18 +97,6 @@ fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequest
             }
         }
         if (tab == 0 && state.item != null) MiniPlayer(state) { tab = 1 }
-        NavigationBar(containerColor = Panel) {
-            NavigationBarItem(
-                selected = tab == 0, onClick = { tab = 0 },
-                icon = { Icon(Icons.Rounded.LibraryMusic, null) },
-                label = { Text("Biblioteca") }, colors = navColors
-            )
-            NavigationBarItem(
-                selected = tab == 1, onClick = { tab = 1 },
-                icon = { Icon(Icons.Rounded.GraphicEq, null) },
-                label = { Text("Reproduciendo") }, colors = navColors
-            )
-        }
     }
 }
 
@@ -119,6 +107,7 @@ private fun LibraryScreen(
     tracks: List<Track>, granted: Boolean, state: PlayerState,
     onRequestPermission: () -> Unit, onPlay: (Int) -> Unit
 ) {
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)) {
             Text("FIDELIDAC", color = Light, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
@@ -138,7 +127,7 @@ private fun LibraryScreen(
             tracks.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("No se encontró música en el dispositivo", color = Muted)
             }
-            else -> LazyColumn(contentPadding = PaddingValues(bottom = 12.dp)) {
+            else -> LazyColumn(contentPadding = PaddingValues(bottom = 12.dp + (if (state.item == null) navBottom else 0.dp))) {
                 itemsIndexed(tracks, key = { _, t -> t.id }) { i, t ->
                     TrackRow(t, selected = state.item?.mediaId == t.id.toString()) { onPlay(i) }
                 }
@@ -162,18 +151,15 @@ private fun TrackRow(t: Track, selected: Boolean, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    t.title, color = if (selected) Accent else Color.White, fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Spacer(Modifier.width(8.dp))
-                QualityChip(info)
-            }
+            Text(
+                t.title, color = if (selected) Accent else Color.White, fontSize = 15.sp,
+                fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
             Text("${t.artist} · ${t.album}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
+        QualityBadge(info, 11.sp)
+        Spacer(Modifier.width(10.dp))
         Text(fmt(t.durationMs), color = Muted, fontSize = 12.sp)
     }
 }
@@ -182,7 +168,8 @@ private fun TrackRow(t: Track, selected: Boolean, onClick: () -> Unit) {
 private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
     val md = state.item?.mediaMetadata
     Row(
-        Modifier.fillMaxWidth().background(Panel).clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().background(Panel).clickable(onClick = onOpen)
+            .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
@@ -197,6 +184,9 @@ private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 // ------------------------------ Reproduciendo ------------------------------
 
+private val PlayerBg = Color(0xFF161616)
+private val SoftGray = Color(0xFF8E8E93)
+
 @Composable
 private fun NowPlayingScreen(state: PlayerState) {
     val ctx = LocalContext.current
@@ -204,26 +194,25 @@ private fun NowPlayingScreen(state: PlayerState) {
     val art = rememberArt(uri, 1000)
     val bits = rememberBitDepth(uri)
     val favs = remember { Favorites(ctx) }
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     if (state.item == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(PlayerBg), contentAlignment = Alignment.Center) {
             Text("Elige una canción de la biblioteca", color = Muted)
         }
         return
     }
 
-    Box(Modifier.fillMaxSize()) {
-        if (art != null) {
-            Image(art, null, Modifier.fillMaxSize().blur(70.dp).alpha(0.22f), contentScale = ContentScale.Crop)
-        }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-            item { PlayerTop(state, art, bits, favs) }
-            itemsIndexed(state.queue) { i, q ->
-                QueueRow(
-                    item = q, current = i == state.index,
-                    onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
-                )
-            }
+    LazyColumn(
+        Modifier.fillMaxSize().background(PlayerBg),
+        contentPadding = PaddingValues(bottom = 24.dp + navBottom)
+    ) {
+        item { PlayerTop(state, art, bits, favs) }
+        itemsIndexed(state.queue) { i, q ->
+            QueueRow(
+                item = q, current = i == state.index,
+                onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
+            )
         }
     }
 }
@@ -243,15 +232,16 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
     val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
+    val timeColor = Color(0xFFCFC9BE)
 
     Column(
         Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Carátula con etiqueta Hi-Res
+        // Carátula
         Box(
-            Modifier.padding(horizontal = 26.dp).fillMaxWidth().aspectRatio(1f)
-                .clip(RoundedCornerShape(4.dp)).background(Panel)
+            Modifier.padding(horizontal = 40.dp).fillMaxWidth().aspectRatio(1f)
+                .clip(RoundedCornerShape(12.dp)).background(Panel)
         ) {
             if (art != null) {
                 Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -260,90 +250,125 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
             }
         }
 
-        // Etiquetas de calidad bajo la carátula
-        Spacer(Modifier.height(12.dp))
-        Box(Modifier.fillMaxWidth().padding(horizontal = 26.dp).heightIn(min = 34.dp), contentAlignment = Alignment.CenterStart) {
-            if (info != null) QualityTags(info)
+        // Etiqueta de calidad (izquierda) y datos del archivo (derecha)
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 40.dp).heightIn(min = 36.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (info != null) {
+                QualityBadge(info, 15.sp)
+                Text(
+                    detailText(info),
+                    color = if (info.quality == Quality.LOSSY) Color(0xFFBDBDBD) else BadgeText,
+                    fontSize = 14.sp, fontWeight = FontWeight.Medium
+                )
+            }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
         // Tiempos y posición en la cola
-        Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(fmt((frac * dur).toLong()), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
-            Text("${state.index + 1}/${state.queue.size}", color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
-            Text(fmt(state.durationMs), color = Color.White.copy(alpha = 0.9f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(fmt((frac * dur).toLong()), color = timeColor, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text("${state.index + 1}/${state.queue.size}", color = timeColor, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text(fmt(state.durationMs), color = timeColor, fontSize = 17.sp, fontWeight = FontWeight.Medium)
         }
         SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
 
         // Título, artista, álbum y corazón
         Spacer(Modifier.height(6.dp))
-        Box(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
+        Box(Modifier.fillMaxWidth().padding(horizontal = 40.dp)) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    md?.title?.toString() ?: "", color = Color.White, fontSize = 28.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    md?.artist?.toString() ?: "", color = Color.White.copy(alpha = 0.78f), fontSize = 21.sp,
+                    md?.title?.toString() ?: "", color = Color.White, fontSize = 24.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    md?.albumTitle?.toString() ?: "", color = Color.White.copy(alpha = 0.55f), fontSize = 19.sp,
+                    md?.artist?.toString() ?: "", color = SoftGray, fontSize = 20.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                )
+                Text(
+                    md?.albumTitle?.toString() ?: "", color = Color(0xFF7C7C80), fontSize = 18.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
             }
             IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
                 Icon(
-                    if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null,
-                    tint = if (isFav) Light else Light.copy(alpha = 0.8f),
+                    if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
+                    tint = if (isFav) BadgeText else Color(0xFFE6E6E6),
                     modifier = Modifier.size(30.dp)
                 )
             }
         }
 
         // Controles
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(28.dp))
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 30.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Rounded.Shuffle, null, tint = if (state.shuffle) Light else Light.copy(alpha = 0.4f))
-            }
-            RingButton(Icons.Rounded.SkipPrevious, 64.dp, 1.5.dp, Light.copy(alpha = 0.5f)) { state.previous() }
-            RingButton(
-                if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                90.dp, 2.5.dp, Light, iconSize = 48.dp
-            ) { state.togglePlay() }
-            RingButton(Icons.Rounded.SkipNext, 64.dp, 1.5.dp, Light.copy(alpha = 0.5f)) { state.next() }
-            IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(44.dp)) {
                 Icon(
-                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
-                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Light.copy(alpha = 0.4f) else Light
+                    Icons.Outlined.Shuffle, null,
+                    tint = if (state.shuffle) BadgeText else Color(0xFFB8B8B8), modifier = Modifier.size(28.dp)
+                )
+            }
+            CircleButton(Icons.Outlined.SkipPrevious) { state.previous() }
+            PlayButton(state.isPlaying) { state.togglePlay() }
+            CircleButton(Icons.Outlined.SkipNext) { state.next() }
+            IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat, null,
+                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color(0xFFB8B8B8) else BadgeText,
+                    modifier = Modifier.size(28.dp)
                 )
             }
         }
-
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(32.dp))
     }
 }
 
 @Composable
-private fun RingButton(
-    icon: ImageVector, size: Dp, ring: Dp, ringColor: Color,
-    iconSize: Dp = size * 0.45f, onClick: () -> Unit
-) {
+private fun CircleButton(icon: ImageVector, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(ring, ringColor, CircleShape)
+        Modifier.size(52.dp).clip(CircleShape).background(Color(0xFF262626))
+            .border(1.dp, Color(0xFF3E3E3E), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Light, modifier = Modifier.size(iconSize))
+        Icon(icon, null, tint = Color(0xFFCFCFCF), modifier = Modifier.size(26.dp))
+    }
+}
+
+@Composable
+private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(80.dp)
+            .shadow(14.dp, CircleShape, ambientColor = BadgeGold.copy(alpha = 0.6f), spotColor = BadgeGold.copy(alpha = 0.6f))
+            .clip(CircleShape).background(Color(0xFF1F1D1A))
+            .border(1.dp, Color(0xFF4A4233), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier.size(64.dp).clip(CircleShape)
+                .background(Brush.verticalGradient(listOf(Color(0xFF3A362E), Color(0xFF1C1B19))))
+                .border(2.dp, Brush.verticalGradient(listOf(Color(0xFFEAD8A4), Color(0xFFA6874A))), CircleShape)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            if (playing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    repeat(2) {
+                        Box(Modifier.size(width = 5.dp, height = 22.dp).clip(RoundedCornerShape(3.dp)).background(BadgeText))
+                    }
+                }
+            } else {
+                Icon(Icons.Rounded.PlayArrow, null, tint = BadgeText, modifier = Modifier.size(34.dp))
+            }
+        }
     }
 }
 
@@ -353,13 +378,13 @@ private fun seekFraction(x: Float, width: Int, pad: Float): Float =
 @Composable
 private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(36.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 30.dp).height(36.dp)
             .pointerInput(Unit) {
-                val pad = 8.dp.toPx()
+                val pad = 10.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
             }
             .pointerInput(Unit) {
-                val pad = 8.dp.toPx()
+                val pad = 10.dp.toPx()
                 var last = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
@@ -372,44 +397,49 @@ private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Un
                 )
             }
     ) {
-        val pad = 8.dp.toPx()
+        val pad = 10.dp.toPx()
         val w = size.width - 2 * pad
         val y = size.height / 2
         val x = pad + w * frac
-        drawLine(Color.White.copy(alpha = 0.18f), Offset(pad, y), Offset(pad + w, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-        drawCircle(Color.White, radius = 8.dp.toPx(), center = Offset(x, y))
+        drawLine(Color.White.copy(alpha = 0.14f), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        if (x > pad + 1f) {
+            drawLine(
+                brush = Brush.horizontalGradient(listOf(Color(0xFF8C7A4E), Color(0xFFF1E3B6)), startX = pad, endX = x),
+                start = Offset(pad, y), end = Offset(x, y), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round
+            )
+        }
+        drawCircle(Color(0x33E6CB86), radius = 15.dp.toPx(), center = Offset(x, y))
+        drawCircle(Color(0xFFD9D9D9), radius = 8.dp.toPx(), center = Offset(x, y))
+        drawCircle(Color.White.copy(alpha = 0.55f), radius = 8.dp.toPx(), center = Offset(x, y), style = Stroke(width = 1.dp.toPx()))
     }
 }
 
 @Composable
 private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
     val uri = item.mediaId.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
-    val thumb = rememberArt(uri, 160)
+    val thumb = rememberArt(uri, 200)
     var menu by remember { mutableStateOf(false) }
     val md = item.mediaMetadata
     val info = rememberAudioInfo(item.mediaId.toLongOrNull(), null)
     Column {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 14.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)).background(Panel), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)).background(Panel), contentAlignment = Alignment.Center) {
                 if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Icon(Icons.Rounded.MusicNote, null, tint = Muted)
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        md.title?.toString() ?: "", color = if (current) Accent else Color.White, fontSize = 17.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    QualityChip(info)
-                }
-                Text(md.artist?.toString() ?: "", color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    md.title?.toString() ?: "", color = if (current) BadgeText else Color.White, fontSize = 18.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(md.artist?.toString() ?: "", color = SoftGray, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            Spacer(Modifier.width(8.dp))
+            QualityBadge(info, 12.sp)
             Box {
                 IconButton(onClick = { menu = true }) {
                     Icon(Icons.Rounded.MoreVert, null, tint = Color.White.copy(alpha = 0.85f))
@@ -564,60 +594,38 @@ private fun rateText(sr: Int): String? = when {
     else -> String.format(java.util.Locale.US, "%.1f kHz", sr / 1000.0)
 }
 
-// Etiquetas grandes bajo la carátula
-@Composable
-private fun QualityTags(info: AudioInfo) {
+private val BadgeGold = Color(0xFFD8B866)
+private val BadgeText = Color(0xFFE6CB86)
+private val BadgeFill = Color(0xFF3B3322)
+
+private fun detailText(info: AudioInfo): String {
     val bitsText = info.bits?.takeIf { it > 0 && info.lossless }?.let { "$it bit" }
-    val detail = (listOfNotNull(rateText(info.sampleRate), bitsText).joinToString(" / ") + " " + info.codec).trim()
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        when (info.quality) {
-            Quality.HIRES -> {
-                Text(
-                    "Hi-\nRes", color = TagGold, fontSize = 13.sp, lineHeight = 13.sp,
-                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-                    modifier = Modifier.border(1.5.dp, TagGold, RoundedCornerShape(2.dp))
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                )
-                OutlinedTag(detail)
-            }
-            Quality.LOSSLESS -> {
-                OutlinedTag("LOSSLESS")
-                Text(detail, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            }
-            Quality.LOSSY -> {
-                Text("LOSSY", color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                Text(detail, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            }
-        }
-    }
+    return (listOfNotNull(rateText(info.sampleRate), bitsText).joinToString(" / ") + " " + info.codec).trim()
 }
 
+// HiRes y Lossless: píldora dorada. Lossy: solo texto gris.
 @Composable
-private fun OutlinedTag(text: String) {
-    Text(
-        text, color = TagGold, fontSize = 16.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier.border(1.5.dp, TagGold, RoundedCornerShape(2.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    )
-}
-
-// Etiqueta pequeña para las listas
-@Composable
-private fun QualityChip(info: AudioInfo?) {
+private fun QualityBadge(info: AudioInfo?, size: TextUnit) {
     if (info == null) return
     when (info.quality) {
-        Quality.HIRES -> SmallBox("Hi-Res")
-        Quality.LOSSLESS -> SmallBox("LOSSLESS")
-        Quality.LOSSY -> Text("LOSSY", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Quality.HIRES -> BadgePill("HiRes", size)
+        Quality.LOSSLESS -> BadgePill("Lossless", size)
+        Quality.LOSSY -> Text(
+            "Lossy", color = Color(0xFFBDBDBD), fontSize = size,
+            fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false
+        )
     }
 }
 
 @Composable
-private fun SmallBox(text: String) {
+private fun BadgePill(text: String, size: TextUnit) {
+    val shape = RoundedCornerShape(8.dp)
     Text(
-        text, color = TagGold, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.border(1.dp, TagGold, RoundedCornerShape(2.dp))
-            .padding(horizontal = 4.dp, vertical = 1.dp)
+        text, color = BadgeText, fontSize = size, fontWeight = FontWeight.Medium,
+        maxLines = 1, softWrap = false,
+        modifier = Modifier.clip(shape).background(BadgeFill)
+            .border(1.5.dp, BadgeGold, shape)
+            .padding(horizontal = (size.value * 0.7f).dp, vertical = (size.value * 0.25f).dp)
     )
 }
 
