@@ -229,7 +229,7 @@ internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 private val PlayerBg = Color(0xFF1C1C1E)
 private val SoftGray = Color(0xFF9B9B9B)
-private val HeaderYellow = Color(0xFFF6D12A)
+private val LogoYellow = Color(0xFFF9D238)
 
 @Composable
 private fun NowPlayingScreen(state: PlayerState) {
@@ -247,7 +247,7 @@ private fun NowPlayingScreen(state: PlayerState) {
         return
     }
 
-    // Todo se desliza: arriba el reproductor y abajo la lista de pistas
+    // Todo se desliza sobre el mismo fondo gris oscuro: arriba el reproductor y abajo la lista de pistas
     LazyColumn(
         Modifier.fillMaxSize().background(PlayerBg),
         contentPadding = PaddingValues(bottom = 24.dp + navBottom)
@@ -280,17 +280,13 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
     val timeColor = Color(0xFFF0F0F0)
 
     Column(
-        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 8.dp),
+        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Encabezado: logo + etiqueta + datos (según la calidad del archivo)
-        QualityHeader(info, Modifier.padding(horizontal = 48.dp))
-        Spacer(Modifier.height(6.dp))
-
         // Carátula
         Box(
-            Modifier.padding(horizontal = 48.dp).fillMaxWidth().aspectRatio(1f)
-                .clip(RoundedCornerShape(8.dp)).background(Panel)
+            Modifier.padding(horizontal = 60.dp).fillMaxWidth().aspectRatio(1f)
+                .clip(RoundedCornerShape(5.dp)).background(Panel)
         ) {
             if (art != null) {
                 Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -299,46 +295,50 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
             }
         }
 
+        // Etiqueta de calidad (izquierda) y datos del archivo (derecha), debajo de la carátula
+        Spacer(Modifier.height(6.dp))
+        QualityRow(info, Modifier.padding(horizontal = 60.dp))
+        Spacer(Modifier.height(18.dp))
+
         // Tiempos y posición en la cola
-        Spacer(Modifier.height(20.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 34.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(fmt((frac * dur).toLong()), color = timeColor, fontSize = 17.sp)
-            Text("${state.index + 1}/${state.queue.size}", color = timeColor, fontSize = 17.sp)
-            Text(fmt(state.durationMs), color = timeColor, fontSize = 17.sp)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 60.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(fmt((frac * dur).toLong()), color = timeColor, fontSize = 14.sp)
+            Text("${state.index + 1}/${state.queue.size}", color = timeColor, fontSize = 14.sp)
+            Text(fmt(state.durationMs), color = timeColor, fontSize = 14.sp)
         }
         SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
 
         // Título, artista, álbum y corazón
         Spacer(Modifier.height(8.dp))
-        Box(Modifier.fillMaxWidth().padding(horizontal = 28.dp)) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().padding(horizontal = 52.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    md?.title?.toString() ?: "", color = Color.White, fontSize = 24.sp,
+                    md?.title?.toString() ?: "", color = Color.White, fontSize = 21.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    md?.artist?.toString() ?: "", color = Color(0xFFE6E6E6), fontSize = 20.sp,
+                    md?.artist?.toString() ?: "", color = Color(0xFFE6E6E6), fontSize = 17.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
                 Text(
-                    md?.albumTitle?.toString() ?: "", color = SoftGray, fontSize = 19.sp,
+                    md?.albumTitle?.toString() ?: "", color = SoftGray, fontSize = 16.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                 )
             }
             IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
                 Icon(
                     if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
-                    tint = if (isFav) HeaderYellow else Color(0xFFC8C8C8),
-                    modifier = Modifier.size(30.dp)
+                    tint = if (isFav) LogoYellow else Color(0xFFD2D2D2),
+                    modifier = Modifier.size(26.dp)
                 )
             }
         }
 
         // Controles
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 22.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 40.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -346,7 +346,7 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
                 Icon(
                     Icons.Rounded.Shuffle, null,
                     tint = if (state.shuffle) Color.White else Color(0xFF8E8E8E),
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
             SkipButton(Icons.Rounded.SkipPrevious) { state.previous() }
@@ -356,100 +356,93 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
                 Icon(
                     if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
                     tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color(0xFF8E8E8E) else Color.White,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
         }
-        Spacer(Modifier.height(34.dp))
+
+        // Marca
+        Spacer(Modifier.height(52.dp))
+        Image(
+            painter = painterResource(R.drawable.home_logo),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(LogoYellow),
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier.width(58.dp)
+        )
+        Spacer(Modifier.height(37.dp))
     }
 }
 
-// HiRes: logo + etiqueta rellena + datos en dorado. Lossless: logo + etiqueta con borde + datos en blanco.
-// Con pérdida (MP3, OPUS, AAC...): sin logo ni etiqueta, solo los datos en gris.
+// HiRes: etiqueta roja y datos en rojo. Lossless: etiqueta ámbar y datos en ámbar.
+// Con pérdida (MP3, OPUS, AAC, OGG...): sin etiqueta, solo los datos en gris.
 @Composable
-private fun QualityHeader(info: AudioInfo?, modifier: Modifier = Modifier) {
+private fun QualityRow(info: AudioInfo?, modifier: Modifier = Modifier) {
     val q = info?.quality
-    val premium = q == Quality.HIRES || q == Quality.LOSSLESS
     Row(
-        modifier.fillMaxWidth().heightIn(min = 56.dp),
-        verticalAlignment = Alignment.Bottom,
+        modifier.fillMaxWidth().heightIn(min = 22.dp),
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        if (premium) {
-            Image(
-                painter = painterResource(R.drawable.home_logo),
-                contentDescription = null,
-                colorFilter = ColorFilter.tint(HeaderYellow),
-                contentScale = ContentScale.FillWidth,
-                modifier = Modifier.width(64.dp)
-            )
-        } else {
-            Spacer(Modifier.width(1.dp))
+        when (q) {
+            Quality.HIRES -> QualityPill("HiRes", Color(0xFF8E1F2B), Color(0xFFC63D4C), Color(0xFFF7DEDE))
+            Quality.LOSSLESS -> QualityPill("Lossless", Color(0xFF7B6040), Color(0xFFE8A35C), Color(0xFFF6E7D2))
+            else -> Spacer(Modifier.width(1.dp))
         }
         if (info != null) {
-            Column(horizontalAlignment = Alignment.End) {
-                if (q == Quality.HIRES) {
-                    QualityPill("HiRes", 16.sp, Color(0xFF5B4F1D), Color(0xFFD6BF4E), Color(0xFFF3DB6B))
-                    Spacer(Modifier.height(5.dp))
-                } else if (q == Quality.LOSSLESS) {
-                    QualityPill("Lossless", 14.sp, null, HeaderYellow, HeaderYellow)
-                    Spacer(Modifier.height(5.dp))
-                }
-                Text(
-                    detailText(info),
-                    color = when (q) {
-                        Quality.HIRES -> Color(0xFFF4D95A)
-                        Quality.LOSSLESS -> Color(0xFFEDEDED)
-                        else -> Color(0xFFBDBDBD)
-                    },
-                    fontSize = 13.sp, fontWeight = FontWeight.Medium
-                )
-            }
+            Text(
+                detailText(info),
+                color = when (q) {
+                    Quality.HIRES -> Color(0xFFEA5A63)
+                    Quality.LOSSLESS -> Color(0xFFF0A24A)
+                    else -> Color(0xFFB5B5B5)
+                },
+                fontSize = 12.sp, fontWeight = FontWeight.Medium
+            )
         }
     }
 }
 
 @Composable
-private fun QualityPill(text: String, size: TextUnit, fill: Color?, border: Color, textColor: Color) {
-    val shape = RoundedCornerShape(10.dp)
+private fun QualityPill(text: String, fill: Color, border: Color, textColor: Color) {
+    val shape = RoundedCornerShape(6.dp)
     Text(
-        text, color = textColor, fontSize = size, fontWeight = FontWeight.Medium,
+        text, color = textColor, fontSize = 12.sp, fontWeight = FontWeight.Medium,
         maxLines = 1, softWrap = false,
-        modifier = Modifier.clip(shape)
-            .then(if (fill != null) Modifier.background(fill) else Modifier)
+        modifier = Modifier.clip(shape).background(fill)
             .border(1.5.dp, border, shape)
-            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 1.5.dp)
     )
 }
 
 @Composable
 private fun SkipButton(icon: ImageVector, onClick: () -> Unit) {
     Box(
-        Modifier.size(50.dp).clip(CircleShape)
-            .border(1.5.dp, Color(0xFF707070), CircleShape)
+        Modifier.size(45.dp).clip(CircleShape).background(Color(0xFF2C2C2E))
+            .border(1.5.dp, Color(0xFF58585A), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
     }
 }
 
 @Composable
 private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(69.dp).clip(CircleShape)
-            .border(2.dp, Color.White, CircleShape)
+        Modifier.size(64.dp).clip(CircleShape).background(Color(0xFF2C2C2E))
+            .border(1.5.dp, Color(0xFFD2D2D2), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         if (playing) {
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 repeat(2) {
-                    Box(Modifier.size(width = 7.dp, height = 22.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                    Box(Modifier.size(width = 7.dp, height = 20.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFFE8E8E8)))
                 }
             }
         } else {
-            Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(36.dp))
+            Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFFE8E8E8), modifier = Modifier.size(32.dp))
         }
     }
 }
@@ -460,13 +453,13 @@ private fun seekFraction(x: Float, width: Int, pad: Float): Float =
 @Composable
 private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 27.dp).height(36.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 54.dp).height(36.dp)
             .pointerInput(Unit) {
-                val pad = 7.dp.toPx()
+                val pad = 6.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
             }
             .pointerInput(Unit) {
-                val pad = 7.dp.toPx()
+                val pad = 6.dp.toPx()
                 var last = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
@@ -479,31 +472,31 @@ private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Un
                 )
             }
     ) {
-        val pad = 7.dp.toPx()
+        val pad = 6.dp.toPx()
         val w = size.width - 2 * pad
         val y = size.height / 2
         val x = pad + w * frac
         drawLine(Color(0xFF3A3A3C), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.5.dp.toPx(), cap = StrokeCap.Round)
-        drawCircle(Color.White, radius = 6.5.dp.toPx(), center = Offset(x, y))
+        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawCircle(Color.White, radius = 6.dp.toPx(), center = Offset(x, y))
     }
 }
 
-// Pista de la lista: solo el título; la que suena lleva un fondo gris redondeado.
+// Pista de la lista: solo el nombre, en negrita; la que suena lleva un fondo gris redondeado.
 // Toque = reproducir. Mantener pulsado = menú (reproducir / quitar de la cola).
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 1.5.dp)) {
         Text(
-            item.mediaMetadata.title?.toString() ?: "", color = Color(0xFFF2F2F2), fontSize = 16.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            item.mediaMetadata.title?.toString() ?: "", color = Color.White, fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(if (current) Color(0xFF3A3A3C) else Color.Transparent)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (current) Color(0xFF38383A) else Color.Transparent)
                 .combinedClickable(onClick = onPlay, onLongClick = { menu = true })
-                .padding(horizontal = 13.dp, vertical = 8.dp)
+                .padding(horizontal = 13.dp, vertical = 9.dp)
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Reproducir") }, onClick = { menu = false; onPlay() })
