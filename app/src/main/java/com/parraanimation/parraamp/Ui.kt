@@ -82,44 +82,36 @@ fun ParraTheme(content: @Composable () -> Unit) {
     )
 }
 
-private enum class Screen { HOME, SONGS, PLAYER }
+private enum class Screen { SONGS, PLAYER }
 
 @Composable
 fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequestPermission: () -> Unit) {
-    val ctx = LocalContext.current
-    val stack = remember { mutableStateListOf(Screen.HOME) }
+    // La app abre en el reproductor. Con el gesto/barra "atrás" se pasa a la lista de canciones y otro "atrás" sale.
+    val stack = remember { mutableStateListOf(Screen.SONGS, Screen.PLAYER) }
     val screen = stack.last()
     val go: (Screen) -> Unit = { s -> if (stack.last() != s) stack.add(s) }
-    val toast: (String) -> Unit = { msg -> Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() }
+    val openLibrary: () -> Unit = {
+        if (stack.size > 1 && stack[stack.lastIndex - 1] == Screen.SONGS) stack.removeAt(stack.lastIndex)
+        else go(Screen.SONGS)
+    }
 
     LaunchedEffect(state.isPlaying) {
         while (state.isPlaying) { state.refreshPosition(); delay(250) }
         state.refreshPosition()
     }
-    // Volver atrás: con la barra o el gesto de retroceso del sistema
     BackHandler(enabled = stack.size > 1) { stack.removeAt(stack.lastIndex) }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Box(Modifier.weight(1f)) {
             when (screen) {
-                Screen.HOME -> HomeScreen(
-                    state = state, tracks = tracks,
-                    onAllSongs = { go(Screen.SONGS) },
-                    onQueue = { if (state.item != null) go(Screen.PLAYER) else toast("No hay música en cola") },
-                    onRandomFm = {
-                        if (tracks.isEmpty()) toast("No hay canciones para reproducir")
-                        else { state.playRandom(tracks); go(Screen.PLAYER) }
-                    },
-                    onSoon = { name -> toast("$name: disponible en la próxima actualización") }
-                )
                 Screen.SONGS -> LibraryScreen(tracks, granted, state, onRequestPermission) { index ->
                     state.play(tracks, index); go(Screen.PLAYER)
                 }
-                Screen.PLAYER -> NowPlayingScreen(state)
+                Screen.PLAYER -> NowPlayingScreen(state, onOpenLibrary)
             }
         }
-        // El mini reproductor solo aparece si hay algo cargado
-        if (screen != Screen.PLAYER && state.item != null) MiniPlayer(state) { go(Screen.PLAYER) }
+        // El mini reproductor solo aparece en la lista, y solo si hay algo cargado
+        if (screen == Screen.SONGS && state.item != null) MiniPlayer(state) { go(Screen.PLAYER) }
     }
 }
 
@@ -232,7 +224,7 @@ private val SoftGray = Color(0xFF9B9B9B)
 private val LogoYellow = Color(0xFFF9D238)
 
 @Composable
-private fun NowPlayingScreen(state: PlayerState) {
+private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
     val ctx = LocalContext.current
     val uri = state.item?.mediaId?.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
     val art = rememberArt(uri, 1000)
@@ -241,8 +233,22 @@ private fun NowPlayingScreen(state: PlayerState) {
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     if (state.item == null) {
-        Box(Modifier.fillMaxSize().background(PlayerBg), contentAlignment = Alignment.Center) {
-            Text("Elige una canción de la biblioteca", color = Muted)
+        Box(Modifier.fillMaxSize().background(PlayerBg).statusBarsPadding(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Image(
+                    painter = painterResource(R.drawable.home_logo),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(LogoYellow),
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.width(96.dp)
+                )
+                Spacer(Modifier.height(28.dp))
+                Text("No hay nada reproduciéndose", color = Muted, fontSize = 15.sp)
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onOpenLibrary, colors = ButtonDefaults.buttonColors(containerColor = Light)) {
+                    Text("Abrir biblioteca", color = Color.Black)
+                }
+            }
         }
         return
     }
