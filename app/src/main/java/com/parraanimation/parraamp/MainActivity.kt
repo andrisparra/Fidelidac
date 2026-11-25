@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT)
         )
+        FidelidacFx.init(this)
         state.connect(this)
         setContent {
             ParraTheme {
