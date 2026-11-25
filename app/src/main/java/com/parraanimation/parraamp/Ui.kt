@@ -107,7 +107,7 @@ fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequest
                 Screen.SONGS -> LibraryScreen(tracks, granted, state, onRequestPermission) { index ->
                     state.play(tracks, index); go(Screen.PLAYER)
                 }
-                Screen.PLAYER -> NowPlayingScreen(state, onOpenLibrary)
+                Screen.PLAYER -> NowPlayingScreen(state, openLibrary)
             }
         }
         // El mini reproductor solo aparece en la lista, y solo si hay algo cargado
