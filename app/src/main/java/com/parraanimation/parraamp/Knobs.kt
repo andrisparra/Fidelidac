@@ -2,8 +2,9 @@ package com.parraanimation.parraamp
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,7 +47,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.PI
-import kotlin.math.atan2
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -55,13 +56,9 @@ private val BrassLight = Color(0xFFE2C37E)
 private val BrassDark = Color(0xFFB48C4A)
 private val KnobLogoGold = Color(0xFFD4B14E)
 
-private fun angleAt(p: Offset, w: Int, h: Int): Double {
-    val dx = (p.x - w / 2f).toDouble()
-    val dy = (h / 2f - p.y).toDouble()
-    return Math.toDegrees(atan2(dx, dy))
-}
-
-// Rueda de latón con aro estriado. Se gira con el dedo en círculo; doble toque la devuelve a su posición inicial.
+// Rueda de latón con aro estriado.
+// Se arrastra con el dedo desde cualquier punto: arriba o a la derecha sube, abajo o a la izquierda baja.
+// Doble toque: vuelve a su posición inicial.
 @Composable
 private fun FxKnob(
     label: String,
@@ -85,38 +82,43 @@ private fun FxKnob(
     }
 
     val angle = if (bipolar) v / max * 135f else v / max * 270f
-    val perDeg = if (bipolar) max / 135f else max / 270f
 
     Box(
         Modifier.size(116.dp)
             .pointerInput(Unit) {
-                detectTapGestures(onDoubleTap = {
+                var lastTapUp = 0L
+                awaitEachGesture {
+                    // Se toma el gesto desde el primer toque para que la lista no se desplace
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
                     touched = true
-                    v = default
-                    onChange(default)
-                })
-            }
-            .pointerInput(Unit) {
-                var last = 0.0
-                detectDragGestures(
-                    onDragStart = { o ->
-                        last = angleAt(o, size.width, size.height)
-                        touched = true
-                    },
-                    onDrag = { change, _ ->
+                    val fullRange = 150.dp.toPx()
+                    var last = down.position
+                    var moved = 0f
+                    drag(down.id) { change ->
+                        val dx = change.position.x - last.x
+                        val dy = change.position.y - last.y
+                        last = change.position
+                        moved += abs(dx) + abs(dy)
                         change.consume()
-                        val a = angleAt(change.position, size.width, size.height)
-                        var d = a - last
-                        if (d > 180) d -= 360
-                        if (d < -180) d += 360
-                        last = a
-                        val nv = (v + d.toFloat() * perDeg).coerceIn(min, max)
+                        val nv = (v + (dx - dy) / fullRange * (max - min)).coerceIn(min, max)
                         if (nv != v) {
                             v = nv
                             onChange(nv)
                         }
                     }
-                )
+                    // Doble toque (sin mover el dedo): restablecer
+                    if (moved < viewConfiguration.touchSlop) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapUp < 350L) {
+                            v = default
+                            onChange(default)
+                            lastTapUp = 0L
+                        } else {
+                            lastTapUp = now
+                        }
+                    }
+                }
             },
         contentAlignment = Alignment.Center
     ) {

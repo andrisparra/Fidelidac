@@ -13,6 +13,29 @@ import android.widget.Toast
 import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -219,9 +242,43 @@ internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 // ------------------------------ Reproduciendo ------------------------------
 
-private val PlayerBg = Color(0xFF070707)
+private val PlayerBg = Color(0xFF080808)
 private val SoftGray = Color(0xFF9B9B9B)
+private val InfoGold = Color(0xFFF7D96A)
+private val BadgeOrange = Color(0xFFF2A65A)
 private val LogoGold = Color(0xFFD4B14E)
+
+private data class TrackText(val title: String, val artist: String, val album: String)
+
+private fun Color.scaled(f: Float): Color = Color(red * f, green * f, blue * f, 1f)
+
+// Color medio de la parte baja de la portada: de ahí sale el degradado en el que se funde
+private fun coverEdgeColor(art: ImageBitmap?): Color {
+    if (art == null) return Color(0xFF1A1A1A)
+    return runCatching {
+        var bmp = art.asAndroidBitmap()
+        if (bmp.config == Bitmap.Config.HARDWARE) bmp = bmp.copy(Bitmap.Config.ARGB_8888, false)
+        val h = bmp.height
+        val top = (h * 0.72f).toInt()
+        val band = Bitmap.createBitmap(bmp, 0, top, bmp.width, (h - top).coerceAtLeast(1))
+        Color(Bitmap.createScaledBitmap(band, 1, 1, true).getPixel(0, 0))
+    }.getOrDefault(Color(0xFF1A1A1A))
+}
+
+// Pulsación con efecto de rebote suave
+@Composable
+private fun Modifier.pressable(onClick: () -> Unit): Modifier {
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        if (pressed) 0.9f else 1f,
+        spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+        label = "press"
+    )
+    return this
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .clickable(interactionSource = src, indication = null, onClick = onClick)
+}
 
 @Composable
 private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
@@ -253,23 +310,30 @@ private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
         return
     }
 
-    // Todo se desliza sobre el mismo fondo negro: arriba el reproductor y las ruedas, abajo la lista de pistas
-    LazyColumn(
-        Modifier.fillMaxSize().background(PlayerBg),
-        contentPadding = PaddingValues(bottom = 24.dp + navBottom)
-    ) {
-        item { PlayerTop(state, art, bits, favs) }
-        itemsIndexed(state.queue) { i, q ->
-            QueueRow(
-                item = q, current = i == state.index,
-                onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
-            )
+    // Primera pantalla: portada fundida. Al deslizar: ruedas de sonido y lista de pistas.
+    BoxWithConstraints(Modifier.fillMaxSize().background(PlayerBg)) {
+        val screenH = maxHeight
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + navBottom)) {
+            item { ImmersivePlayer(state, art, bits, favs, screenH) }
+            item {
+                Column {
+                    Spacer(Modifier.height(14.dp))
+                    FxPanel()
+                    Spacer(Modifier.height(30.dp))
+                }
+            }
+            itemsIndexed(state.queue) { i, q ->
+                QueueRow(
+                    item = q, current = i == state.index,
+                    onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: Favorites) {
+private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: Favorites, screenH: Dp) {
     val md = state.item?.mediaMetadata
     val mediaId = state.item?.mediaId ?: ""
     val isFav = mediaId in favs.ids
@@ -279,172 +343,249 @@ private fun PlayerTop(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: F
     val info: AudioInfo? = if (live != null && liveMime != null)
         AudioInfo(codecName(liveMime), losslessMime(liveMime) ?: false, live.sampleRate, probed?.bits ?: bits, live.bitrate)
     else probed
+    val q = info?.quality
+    val premium = q == Quality.HIRES || q == Quality.LOSSLESS
 
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
     val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
-    val timeColor = Color(0xFFF0F0F0)
 
-    Column(
-        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Etiqueta de calidad y datos del archivo, sobre la carátula
-        QualityHeader(info, Modifier.padding(horizontal = 52.dp))
-        Spacer(Modifier.height(6.dp))
+    // Sentido del cambio de pista: siguiente (true) o anterior (false)
+    var prevIndex by remember { mutableIntStateOf(state.index) }
+    val forward = state.index >= prevIndex
+    SideEffect { prevIndex = state.index }
 
-        // Carátula
+    // Animaciones suaves: color del fondo, acercamiento al reproducir y atenuación al pausar
+    val edge = remember(art) { coverEdgeColor(art) }
+    val bg by animateColorAsState(edge, tween(900), label = "bg")
+    val playZoom by animateFloatAsState(
+        if (state.isPlaying) 1.03f else 1f,
+        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
+        label = "zoom"
+    )
+    val dim by animateFloatAsState(if (state.isPlaying) 0f else 0.22f, tween(450), label = "dim")
+
+    Box(Modifier.fillMaxWidth().height(screenH)) {
+        // Fondo: el color de la portada se oscurece hacia abajo
         Box(
-            Modifier.padding(horizontal = 52.dp).fillMaxWidth().aspectRatio(1f)
-                .clip(RoundedCornerShape(2.dp)).background(Panel)
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    0.50f to bg,
+                    0.58f to bg.scaled(0.65f),
+                    0.74f to bg.scaled(0.33f),
+                    0.89f to bg.scaled(0.08f),
+                    1f to Color(0xFF050505)
+                )
+            )
+        )
+
+        // Portada a todo el ancho, fundida por abajo con el fondo
+        Box(
+            Modifier.fillMaxWidth().height(screenH * 0.55f)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.Black,
+                            0.60f to Color.Black,
+                            0.88f to Color.Black.copy(alpha = 0.5f),
+                            1f to Color.Transparent
+                        ),
+                        blendMode = BlendMode.DstIn
+                    )
+                }
         ) {
-            if (art != null) {
-                Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.align(Alignment.Center).size(96.dp))
+            AnimatedContent(
+                targetState = art,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    (fadeIn(tween(600, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(600, easing = FastOutSlowInEasing)) { w -> if (forward) w / 8 else -w / 8 }) togetherWith
+                        (fadeOut(tween(600)) +
+                            slideOutHorizontally(tween(600, easing = FastOutSlowInEasing)) { w -> if (forward) -w / 8 else w / 8 })
+                },
+                label = "cover"
+            ) { a ->
+                if (a != null) {
+                    Image(
+                        a, null,
+                        modifier = Modifier.fillMaxSize().graphicsLayer {
+                            scaleX = playZoom
+                            scaleY = playZoom
+                            transformOrigin = TransformOrigin(0.5f, 0f)
+                        },
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.size(96.dp))
+                    }
+                }
             }
-        }
-
-        // Tiempos y posición en la cola
-        Spacer(Modifier.height(18.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 58.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(fmt((frac * dur).toLong()), color = timeColor, fontSize = 14.sp)
-            Text("${state.index + 1}/${state.queue.size}", color = timeColor, fontSize = 14.sp)
-            Text(fmt(state.durationMs), color = timeColor, fontSize = 14.sp)
-        }
-        SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
-
-        // Título, artista, álbum y corazón
-        Spacer(Modifier.height(8.dp))
-        Box(Modifier.fillMaxWidth().padding(horizontal = 52.dp)) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    md?.title?.toString() ?: "", color = Color.White, fontSize = 21.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    md?.artist?.toString() ?: "", color = Color(0xFFE6E6E6), fontSize = 17.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
-                )
-                Text(
-                    md?.albumTitle?.toString() ?: "", color = SoftGray, fontSize = 16.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
-                )
-            }
-            IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
-                Icon(
-                    if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
-                    tint = if (isFav) LogoGold else Color(0xFFD2D2D2),
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-        }
-
-        // Controles
-        Spacer(Modifier.height(16.dp))
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 40.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    Icons.Rounded.Shuffle, null,
-                    tint = if (state.shuffle) Color.White else Color(0xFF8E8E8E),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            SkipButton(Icons.Rounded.SkipPrevious) { state.previous() }
-            PlayButton(state.isPlaying) { state.togglePlay() }
-            SkipButton(Icons.Rounded.SkipNext) { state.next() }
-            IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
-                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color(0xFF8E8E8E) else Color.White,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-
-        // Ruedas de sonido con el logo fijo al centro
-        Spacer(Modifier.height(26.dp))
-        FxPanel()
-        Spacer(Modifier.height(30.dp))
-    }
-}
-
-// Calidad HiRes o Lossless: etiqueta dorada + datos ("FLAC 176.4 KHz / 24 bit").
-// Con pérdida (MP3, OPUS, AAC, OGG...): sin etiqueta, solo los datos en gris.
-@Composable
-private fun QualityHeader(info: AudioInfo?, modifier: Modifier = Modifier) {
-    val q = info?.quality
-    val premium = q == Quality.HIRES || q == Quality.LOSSLESS
-    Row(
-        modifier.fillMaxWidth().heightIn(min = 24.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (premium) {
-            QualityPill(if (q == Quality.HIRES) "HiRes" else "Lossless")
-            Spacer(Modifier.width(8.dp))
-        }
-        if (info != null) {
-            Text(
-                headerText(info),
-                color = if (premium) Color(0xFFF2D660) else Color(0xFFB5B5B5),
-                fontSize = 11.5.sp, fontWeight = FontWeight.Medium
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
+            Box(
+                Modifier.fillMaxWidth().height(110.dp)
+                    .background(Brush.verticalGradient(listOf(Color(0x66000000), Color.Transparent)))
             )
         }
+
+        // Controles e información sobre el degradado
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 92.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Tiempos; en el centro la insignia de calidad o la posición en la cola
+            Box(Modifier.fillMaxWidth().padding(horizontal = 56.dp).heightIn(min = 34.dp)) {
+                Text(fmt((frac * dur).toLong()), color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterStart))
+                Crossfade(
+                    targetState = q,
+                    animationSpec = tween(400),
+                    modifier = Modifier.align(Alignment.Center),
+                    label = "badge"
+                ) { qq ->
+                    when (qq) {
+                        Quality.HIRES -> CenterBadge("HR", 17.sp)
+                        Quality.LOSSLESS -> CenterBadge("Lossless", 14.sp)
+                        else -> Text("${state.index + 1}/${state.queue.size}", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+                Text(fmt(state.durationMs), color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterEnd))
+            }
+            SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+
+            // Título, artista, álbum y corazón
+            Spacer(Modifier.height(8.dp))
+            val text = TrackText(md?.title?.toString() ?: "", md?.artist?.toString() ?: "", md?.albumTitle?.toString() ?: "")
+            Box(Modifier.fillMaxWidth().padding(horizontal = 52.dp)) {
+                AnimatedContent(
+                    targetState = text,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 44.dp),
+                    transitionSpec = {
+                        (fadeIn(tween(520, delayMillis = 120)) +
+                            slideInHorizontally(tween(520, easing = FastOutSlowInEasing)) { w -> if (forward) w / 10 else -w / 10 }) togetherWith
+                            (fadeOut(tween(260)) +
+                                slideOutHorizontally(tween(260)) { w -> if (forward) -w / 10 else w / 10 })
+                    },
+                    label = "text"
+                ) { t ->
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            t.title, color = Color.White, fontSize = 21.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            t.artist, color = Color(0xFFF0F0F0), fontSize = 17.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                        )
+                        Text(
+                            t.album, color = Color(0xFFB9C3D1), fontSize = 16.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
+                    Icon(
+                        if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
+                        tint = if (isFav) InfoGold else Color(0xFFE6E6E6),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+
+            // Controles
+            Spacer(Modifier.height(20.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        Icons.Rounded.Shuffle, null,
+                        tint = if (state.shuffle) Color.White else Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                SkipButton(Icons.Rounded.SkipPrevious) { state.previous() }
+                PlayButton(state.isPlaying) { state.togglePlay() }
+                SkipButton(Icons.Rounded.SkipNext) { state.next() }
+                IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
+                        tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color.White.copy(alpha = 0.6f) else Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            // Más información de la calidad del archivo
+            Spacer(Modifier.height(26.dp))
+            val line = if (info != null) infoLine(info) else ""
+            Crossfade(targetState = line, animationSpec = tween(400), label = "info") { l ->
+                Text(
+                    l, color = if (premium) InfoGold else Color(0xFFB5B5B5),
+                    fontSize = 15.sp, fontWeight = FontWeight.Medium
+                )
+            }
+        }
     }
 }
 
-private fun headerText(info: AudioInfo): String {
-    val rate = rateText(info.sampleRate)?.replace("kHz", "KHz")
-    val bitsText = info.bits?.takeIf { it > 0 && info.lossless }?.let { "$it bit" }
+private fun infoLine(info: AudioInfo): String {
+    val rate = rateText(info.sampleRate)
+    val bitsText = info.bits?.takeIf { it > 0 && info.lossless }?.let { "$it bits" }
     val tail = listOfNotNull(rate, bitsText).joinToString(" / ")
     return listOf(info.codec.takeIf { it != "—" } ?: "", tail).filter { it.isNotEmpty() }.joinToString(" ")
 }
 
 @Composable
-private fun QualityPill(text: String) {
-    val shape = RoundedCornerShape(5.dp)
+private fun CenterBadge(text: String, size: TextUnit) {
     Text(
-        text, color = Color(0xFFF3DB6B), fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        text, color = Color.White, fontSize = size, fontWeight = FontWeight.Bold,
         maxLines = 1, softWrap = false,
-        modifier = Modifier.clip(shape).background(Color(0xFF5B4F1D))
-            .border(1.5.dp, Color(0xFFD6BF4E), shape)
-            .padding(horizontal = 9.dp, vertical = 2.dp)
+        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(BadgeOrange)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
     )
 }
 
 @Composable
 private fun SkipButton(icon: ImageVector, onClick: () -> Unit) {
     Box(
-        Modifier.size(45.dp).clip(CircleShape).background(Color(0xFF2C2C2E))
-            .border(1.5.dp, Color(0xFF58585A), CircleShape)
-            .clickable(onClick = onClick),
+        Modifier.size(45.dp).pressable(onClick).clip(CircleShape)
+            .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
     }
 }
 
+// Pausa y reproducir: el icono cambia con un fundido y un pequeño zoom
 @Composable
 private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(64.dp).clip(CircleShape).background(Color(0xFF2C2C2E))
-            .border(1.5.dp, Color(0xFFD2D2D2), CircleShape)
-            .clickable(onClick = onClick),
+        Modifier.size(64.dp).pressable(onClick).clip(CircleShape)
+            .border(2.dp, Color.White, CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        if (playing) {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                repeat(2) {
-                    Box(Modifier.size(width = 7.dp, height = 20.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFFE8E8E8)))
+        AnimatedContent(
+            targetState = playing,
+            transitionSpec = {
+                (fadeIn(tween(260)) + scaleIn(initialScale = 0.5f, animationSpec = tween(260, easing = FastOutSlowInEasing))) togetherWith
+                    (fadeOut(tween(160)) + scaleOut(targetScale = 0.5f, animationSpec = tween(160)))
+            },
+            label = "playpause"
+        ) { p ->
+            if (p) {
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    repeat(2) {
+                        Box(Modifier.size(width = 7.dp, height = 22.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                    }
                 }
+            } else {
+                Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp))
             }
-        } else {
-            Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFFE8E8E8), modifier = Modifier.size(32.dp))
         }
     }
 }
@@ -455,7 +596,7 @@ private fun seekFraction(x: Float, width: Int, pad: Float): Float =
 @Composable
 private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 53.dp).height(36.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 50.dp).height(36.dp)
             .pointerInput(Unit) {
                 val pad = 6.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
@@ -478,13 +619,13 @@ private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Un
         val w = size.width - 2 * pad
         val y = size.height / 2
         val x = pad + w * frac
-        drawLine(Color(0xFF333333), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(Color(0xFF39434F), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
         drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
         drawCircle(Color.White, radius = 5.5.dp.toPx(), center = Offset(x, y))
     }
 }
 
-// Pista de la lista: solo el nombre, en negrita; la que suena lleva un fondo gris redondeado.
+// Pista de la lista: solo el nombre; la que suena lleva un fondo gris redondeado.
 // Toque = reproducir. Mantener pulsado = menú (reproducir / quitar de la cola).
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
