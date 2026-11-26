@@ -1,4 +1,4 @@
-# Fidelidad
+# Fidelidac
 Reproductor HiFi para Android (Kotlin + Jetpack Compose + Media3), UI inspirada en el Walkman.
 
 ## Compilar sin computadora
