@@ -13,6 +13,14 @@ import android.widget.Toast
 import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -242,10 +250,13 @@ internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 
 // ------------------------------ Reproduciendo ------------------------------
 
-private val PlayerBg = Color(0xFF080808)
+private val PlayerBg = Color(0xFF060606)
 private val SoftGray = Color(0xFF9B9B9B)
-private val InfoGold = Color(0xFFF7D96A)
-private val BadgeOrange = Color(0xFFF2A65A)
+private val InfoGold = Color(0xFFF3D468)
+private val PillFill = Color(0xFF9A6334)
+private val PillBorder = Color(0xFFE8A65C)
+private val PillText = Color(0xFFF6DA83)
+private val BannerOrange = Color(0xFFF0A957)
 private val LogoGold = Color(0xFFD4B14E)
 
 private data class TrackText(val title: String, val artist: String, val album: String)
@@ -271,7 +282,7 @@ private fun Modifier.pressable(onClick: () -> Unit): Modifier {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        if (pressed) 0.9f else 1f,
+        if (pressed) 0.88f else 1f,
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
         label = "press"
     )
@@ -287,7 +298,6 @@ private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
     val art = rememberArt(uri, 1000)
     val bits = rememberBitDepth(uri)
     val favs = remember { Favorites(ctx) }
-    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     if (state.item == null) {
         Box(Modifier.fillMaxSize().background(PlayerBg).statusBarsPadding(), contentAlignment = Alignment.Center) {
@@ -310,25 +320,8 @@ private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
         return
     }
 
-    // Primera pantalla: portada fundida. Al deslizar: ruedas de sonido y lista de pistas.
     BoxWithConstraints(Modifier.fillMaxSize().background(PlayerBg)) {
-        val screenH = maxHeight
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + navBottom)) {
-            item { ImmersivePlayer(state, art, bits, favs, screenH) }
-            item {
-                Column {
-                    Spacer(Modifier.height(14.dp))
-                    FxPanel()
-                    Spacer(Modifier.height(30.dp))
-                }
-            }
-            itemsIndexed(state.queue) { i, q ->
-                QueueRow(
-                    item = q, current = i == state.index,
-                    onPlay = { state.skipTo(i) }, onRemove = { state.removeAt(i) }
-                )
-            }
-        }
+        ImmersivePlayer(state, art, bits, favs, maxHeight)
     }
 }
 
@@ -345,10 +338,30 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
     else probed
     val q = info?.quality
     val premium = q == Quality.HIRES || q == Quality.LOSSLESS
+    val hiRes = info?.hiRes == true
 
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = state.durationMs.coerceAtLeast(1L)
     val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
+    // La barra avanza sin saltos entre actualizaciones; al arrastrar sigue al dedo
+    val animFrac by animateFloatAsState(
+        frac,
+        if (drag != null) snap<Float>() else tween<Float>(260, easing = LinearEasing),
+        label = "frac"
+    )
+
+    // Aviso "Disponible en Alta Resolución": aparece unos segundos y se oculta
+    var showBanner by remember { mutableStateOf(false) }
+    LaunchedEffect(mediaId, hiRes) {
+        if (hiRes) {
+            delay(600)
+            showBanner = true
+            delay(4200)
+            showBanner = false
+        } else {
+            showBanner = false
+        }
+    }
 
     // Sentido del cambio de pista: siguiente (true) o anterior (false)
     var prevIndex by remember { mutableIntStateOf(state.index) }
@@ -365,15 +378,16 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
     )
     val dim by animateFloatAsState(if (state.isPlaying) 0f else 0.22f, tween(450), label = "dim")
 
-    Box(Modifier.fillMaxWidth().height(screenH)) {
+    Box(Modifier.fillMaxSize()) {
         // Fondo: el color de la portada se oscurece hacia abajo
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
-                    0.50f to bg,
-                    0.58f to bg.scaled(0.65f),
-                    0.74f to bg.scaled(0.33f),
-                    0.89f to bg.scaled(0.08f),
+                    0.48f to bg,
+                    0.58f to bg.scaled(0.72f),
+                    0.68f to bg.scaled(0.50f),
+                    0.78f to bg.scaled(0.26f),
+                    0.90f to bg.scaled(0.09f),
                     1f to Color(0xFF050505)
                 )
             )
@@ -426,41 +440,44 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
             Box(
                 Modifier.fillMaxWidth().height(110.dp)
-                    .background(Brush.verticalGradient(listOf(Color(0x66000000), Color.Transparent)))
+                    .background(Brush.verticalGradient(listOf(Color(0x40000000), Color.Transparent)))
             )
         }
 
-        // Controles e información sobre el degradado
+        // Información, barra y controles sobre el degradado
         Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 92.dp),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 26.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Tiempos; en el centro la insignia de calidad o la posición en la cola
-            Box(Modifier.fillMaxWidth().padding(horizontal = 56.dp).heightIn(min = 34.dp)) {
-                Text(fmt((frac * dur).toLong()), color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterStart))
-                Crossfade(
-                    targetState = q,
-                    animationSpec = tween(400),
-                    modifier = Modifier.align(Alignment.Center),
-                    label = "badge"
-                ) { qq ->
+            // Etiqueta de calidad (HiRes o Lossless; con pérdida no hay etiqueta)
+            Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) {
+                Crossfade(targetState = q, animationSpec = tween(400), label = "badge") { qq ->
                     when (qq) {
-                        Quality.HIRES -> CenterBadge("HR", 17.sp)
-                        Quality.LOSSLESS -> CenterBadge("Lossless", 14.sp)
-                        else -> Text("${state.index + 1}/${state.queue.size}", color = Color.White, fontSize = 14.sp)
+                        Quality.HIRES -> QualityPill("HiRes")
+                        Quality.LOSSLESS -> QualityPill("Lossless")
+                        else -> Spacer(Modifier.height(1.dp))
                     }
                 }
-                Text(fmt(state.durationMs), color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterEnd))
             }
-            SeekBar(frac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+            Spacer(Modifier.height(4.dp))
+            // Datos del archivo
+            val line = if (info != null) infoLine(info) else ""
+            Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
+                Crossfade(targetState = line, animationSpec = tween(400), label = "info") { l ->
+                    Text(
+                        l, color = if (premium) InfoGold else Color(0xFFB5B5B5),
+                        fontSize = 11.sp, fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
 
-            // Título, artista, álbum y corazón
-            Spacer(Modifier.height(8.dp))
+            // Título, artista y álbum (con corazón de favoritos)
             val text = TrackText(md?.title?.toString() ?: "", md?.artist?.toString() ?: "", md?.albumTitle?.toString() ?: "")
-            Box(Modifier.fillMaxWidth().padding(horizontal = 52.dp)) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 36.dp)) {
                 AnimatedContent(
                     targetState = text,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 44.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp),
                     transitionSpec = {
                         (fadeIn(tween(520, delayMillis = 120)) +
                             slideInHorizontally(tween(520, easing = FastOutSlowInEasing)) { w -> if (forward) w / 10 else -w / 10 }) togetherWith
@@ -469,66 +486,69 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
                     },
                     label = "text"
                 ) { t ->
+                    val titleSize = when {
+                        t.title.length <= 16 -> 30.sp
+                        t.title.length <= 24 -> 25.sp
+                        else -> 21.sp
+                    }
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            t.title, color = Color.White, fontSize = 21.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            t.artist, color = Color(0xFFF0F0F0), fontSize = 17.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                            t.title, color = Color.White, fontSize = titleSize, fontWeight = FontWeight.Bold,
+                            lineHeight = 34.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                         )
                         Text(
-                            t.album, color = Color(0xFFB9C3D1), fontSize = 16.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                            t.artist, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                            lineHeight = 26.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+                        )
+                        Text(
+                            t.album, color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp,
+                            lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                         )
                     }
                 }
                 IconButton(onClick = { favs.toggle(mediaId) }, modifier = Modifier.align(Alignment.TopEnd)) {
                     Icon(
                         if (isFav) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder, null,
-                        tint = if (isFav) InfoGold else Color(0xFFE6E6E6),
-                        modifier = Modifier.size(26.dp)
+                        tint = if (isFav) InfoGold else Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
 
+            // Al arrastrar la barra se muestra el tiempo; en reposo no hay números
+            Box(Modifier.fillMaxWidth().height(18.dp), contentAlignment = Alignment.Center) {
+                AnimatedVisibility(visible = drag != null, enter = fadeIn(tween(150)), exit = fadeOut(tween(250))) {
+                    Text(
+                        "${fmt((frac * dur).toLong())} / ${fmt(state.durationMs)}",
+                        color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+            SeekBar(animFrac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+
             // Controles
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(10.dp))
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                Modifier.fillMaxWidth(0.62f),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { state.toggleShuffle() }, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        Icons.Rounded.Shuffle, null,
-                        tint = if (state.shuffle) Color.White else Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                SkipButton(Icons.Rounded.SkipPrevious) { state.previous() }
-                PlayButton(state.isPlaying) { state.togglePlay() }
-                SkipButton(Icons.Rounded.SkipNext) { state.next() }
-                IconButton(onClick = { state.cycleRepeat() }, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, null,
-                        tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) Color.White.copy(alpha = 0.6f) else Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                ControlIcon(
+                    Icons.Rounded.Shuffle, 30.dp,
+                    if (state.shuffle) Color.White else Color.White.copy(alpha = 0.6f)
+                ) { state.toggleShuffle() }
+                ControlIcon(Icons.Rounded.FastRewind, 40.dp, Color.White, nudge = -10f) { state.previous() }
+                PlayPause(state.isPlaying) { state.togglePlay() }
+                ControlIcon(Icons.Rounded.FastForward, 40.dp, Color.White, nudge = 10f) { state.next() }
+                ControlIcon(
+                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, 30.dp,
+                    if (state.repeatMode == Player.REPEAT_MODE_OFF) Color.White.copy(alpha = 0.6f) else Color.White
+                ) { state.cycleRepeat() }
             }
 
-            // Más información de la calidad del archivo
-            Spacer(Modifier.height(26.dp))
-            val line = if (info != null) infoLine(info) else ""
-            Crossfade(targetState = line, animationSpec = tween(400), label = "info") { l ->
-                Text(
-                    l, color = if (premium) InfoGold else Color(0xFFB5B5B5),
-                    fontSize = 15.sp, fontWeight = FontWeight.Medium
-                )
-            }
+            // Aviso de alta resolución
+            Spacer(Modifier.height(10.dp))
+            HiResBanner(showBanner)
         }
     }
 }
@@ -541,34 +561,69 @@ private fun infoLine(info: AudioInfo): String {
 }
 
 @Composable
-private fun CenterBadge(text: String, size: TextUnit) {
+private fun QualityPill(text: String) {
+    val shape = RoundedCornerShape(6.dp)
     Text(
-        text, color = Color.White, fontSize = size, fontWeight = FontWeight.Bold,
+        text, color = PillText, fontSize = 11.sp, fontWeight = FontWeight.Bold,
         maxLines = 1, softWrap = false,
-        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(BadgeOrange)
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+        modifier = Modifier.clip(shape).background(PillFill)
+            .border(1.5.dp, PillBorder, shape)
+            .padding(horizontal = 9.dp, vertical = 2.dp)
     )
 }
 
+// Aviso que entra desde abajo con un fundido y un leve zoom, y se retira solo
 @Composable
-private fun SkipButton(icon: ImageVector, onClick: () -> Unit) {
+private fun HiResBanner(visible: Boolean) {
+    Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(450)) +
+                slideInVertically(tween(550, easing = FastOutSlowInEasing)) { it } +
+                scaleIn(initialScale = 0.9f, animationSpec = tween(550, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(380)) +
+                slideOutVertically(tween(450, easing = FastOutSlowInEasing)) { it / 2 } +
+                scaleOut(targetScale = 0.95f, animationSpec = tween(380))
+        ) {
+            Row(
+                Modifier.clip(RoundedCornerShape(50)).background(BannerOrange)
+                    .padding(horizontal = 18.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("💿", fontSize = 15.sp)
+                Spacer(Modifier.width(8.dp))
+                Text("Disponible en Alta Resolución", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+// Icono de control sin marco. Los de anterior y siguiente dan un pequeño empujón al tocarlos.
+@Composable
+private fun ControlIcon(icon: ImageVector, size: Dp, tint: Color, nudge: Float = 0f, onClick: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current.density
+    val offset = remember { Animatable(0f) }
     Box(
-        Modifier.size(45.dp).pressable(onClick).clip(CircleShape)
-            .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape),
+        Modifier.size(48.dp).pressable {
+            onClick()
+            if (nudge != 0f) {
+                scope.launch {
+                    offset.animateTo(nudge * density, tween(110))
+                    offset.animateTo(0f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
+                }
+            }
+        },
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(size).graphicsLayer { translationX = offset.value })
     }
 }
 
 // Pausa y reproducir: el icono cambia con un fundido y un pequeño zoom
 @Composable
-private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.size(64.dp).pressable(onClick).clip(CircleShape)
-            .border(2.dp, Color.White, CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
+private fun PlayPause(playing: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(56.dp).pressable(onClick), contentAlignment = Alignment.Center) {
         AnimatedContent(
             targetState = playing,
             transitionSpec = {
@@ -578,13 +633,13 @@ private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
             label = "playpause"
         ) { p ->
             if (p) {
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     repeat(2) {
-                        Box(Modifier.size(width = 7.dp, height = 22.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                        Box(Modifier.size(width = 8.dp, height = 28.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
                     }
                 }
             } else {
-                Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp))
+                Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(48.dp))
             }
         }
     }
@@ -593,16 +648,17 @@ private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
 private fun seekFraction(x: Float, width: Int, pad: Float): Float =
     if (width <= 2 * pad) 0f else ((x - pad) / (width - 2 * pad)).coerceIn(0f, 1f)
 
+// Barra gruesa y redondeada, como en la captura
 @Composable
 private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
     Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 50.dp).height(36.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 50.dp).height(24.dp)
             .pointerInput(Unit) {
-                val pad = 6.dp.toPx()
+                val pad = 8.dp.toPx()
                 detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
             }
             .pointerInput(Unit) {
-                val pad = 6.dp.toPx()
+                val pad = 8.dp.toPx()
                 var last = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
@@ -615,18 +671,17 @@ private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Un
                 )
             }
     ) {
-        val pad = 6.dp.toPx()
+        val pad = 8.dp.toPx()
         val w = size.width - 2 * pad
         val y = size.height / 2
         val x = pad + w * frac
-        drawLine(Color(0xFF39434F), Offset(pad, y), Offset(pad + w, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-        drawCircle(Color.White, radius = 5.5.dp.toPx(), center = Offset(x, y))
+        drawLine(Color(0xFF6B7078), Offset(pad, y), Offset(pad + w, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+        drawCircle(Color.White, radius = 7.dp.toPx(), center = Offset(x, y))
     }
 }
 
-// Pista de la lista: solo el nombre; la que suena lleva un fondo gris redondeado.
-// Toque = reproducir. Mantener pulsado = menú (reproducir / quitar de la cola).
+// Pista de la lista (se usará cuando vuelva la lista a esta pantalla)
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueueRow(item: MediaItem, current: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
