@@ -516,14 +516,7 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
             }
 
             // Al arrastrar la barra se muestra el tiempo; en reposo no hay números
-            Box(Modifier.fillMaxWidth().height(18.dp), contentAlignment = Alignment.Center) {
-                AnimatedVisibility(visible = drag != null, enter = fadeIn(tween(150)), exit = fadeOut(tween(250))) {
-                    Text(
-                        "${fmt((frac * dur).toLong())} / ${fmt(state.durationMs)}",
-                        color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium
-                    )
-                }
-            }
+            DragTimeLabel(drag != null, "${fmt((frac * dur).toLong())} / ${fmt(state.durationMs)}")
             SeekBar(animFrac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
 
             // Controles
@@ -570,6 +563,16 @@ private fun QualityPill(text: String) {
             .border(1.5.dp, PillBorder, shape)
             .padding(horizontal = 9.dp, vertical = 2.dp)
     )
+}
+
+// Tiempo que aparece solo mientras se arrastra la barra
+@Composable
+private fun DragTimeLabel(visible: Boolean, text: String) {
+    Box(Modifier.fillMaxWidth().height(18.dp), contentAlignment = Alignment.Center) {
+        AnimatedVisibility(visible = visible, enter = fadeIn(tween(150)), exit = fadeOut(tween(250))) {
+            Text(text, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+    }
 }
 
 // Aviso que entra desde abajo con un fundido y un leve zoom, y se retira solo
