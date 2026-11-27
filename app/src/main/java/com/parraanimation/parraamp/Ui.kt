@@ -116,7 +116,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.unit.percent
 
 
 // ---- Paleta: negro profundo, naranja de acento, dorado Hi-Res ----
@@ -1410,7 +1409,4 @@ private fun PauseActionButton(label: String, active: Boolean, onClick: () -> Uni
     ) {
         Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
-}
-
-// Barra de progreso (reutiliza la existente o versión simple)
 }
