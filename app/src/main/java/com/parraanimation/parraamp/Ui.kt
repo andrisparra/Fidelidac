@@ -109,6 +109,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.percent
+
+
 // ---- Paleta: negro profundo, naranja de acento, dorado Hi-Res ----
 val Bg = Color(0xFF0A0A0B)
 val Panel = Color(0xFF151517)
@@ -128,11 +138,25 @@ fun ParraTheme(content: @Composable () -> Unit) {
     )
 }
 
-private enum class Screen { SONGS, PLAYER }
 
 @Composable
 fun HiFiApp(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequestPermission: () -> Unit) {
-    // La app abre en el reproductor. Con el gesto/barra "atrás" se pasa a la lista de canciones y otro "atrás" sale.
+    LaunchedEffect(state.isPlaying) {
+        while (state.isPlaying) { state.refreshPosition(); delay(250) }
+        state.refreshPosition()
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        VerticalCarouselPlayer(state, tracks, granted)
+    }
+}
+
+// Las funciones de lista y navegación se mantienen para futuras actualizaciones
+private enum class Screen { SONGS, PLAYER }
+
+
+@Composable
+private fun HiFiAppOld(state: PlayerState, tracks: List<Track>, granted: Boolean, onRequestPermission: () -> Unit) {
     val stack = remember { mutableStateListOf(Screen.SONGS, Screen.PLAYER) }
     val screen = stack.last()
     val go: (Screen) -> Unit = { s -> if (stack.last() != s) stack.add(s) }
@@ -1086,4 +1110,307 @@ private fun rememberBitDepth(uri: Uri?): Int? {
             }.getOrNull()
         }
     }.value
+}
+
+
+// ===================== CARRUSEL VERTICAL INFINITO =====================
+
+@Composable
+fun VerticalCarouselPlayer(
+    state: PlayerState,
+    tracks: List<Track>,
+    granted: Boolean
+) {
+    if (tracks.isEmpty() || !granted) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Text(
+                if (!granted) "Concede permiso para acceder a la música" else "No hay canciones en el dispositivo",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(32.dp)
+            )
+        }
+        return
+    }
+
+    val pagerState = rememberPagerState(
+        initialPage = tracks.size * 50,
+        pageCount = { tracks.size * 100 }
+    )
+
+    val currentPage = pagerState.currentPage
+    val trackIndex = currentPage % tracks.size
+    val currentTrack = tracks[trackIndex]
+
+    // Sincronizar reproducción cuando el pager se asienta en una nueva canción
+    LaunchedEffect(currentPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress) {
+            val targetIndex = currentPage % tracks.size
+            if (state.index != targetIndex || state.item?.mediaId != currentTrack.id.toString()) {
+                state.play(tracks, targetIndex)
+            }
+        }
+    }
+
+    // Si el reproductor cambia de pista por otro medio, intentar sincronizar (opcional)
+    LaunchedEffect(state.index) {
+        val desired = (tracks.size * 50) + (state.index % tracks.size)
+        if (abs(pagerState.currentPage - desired) > 1 && !pagerState.isScrollInProgress) {
+            pagerState.scrollToPage(desired)
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        VerticalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+                .align(Alignment.TopCenter)
+                .padding(top = 48.dp),
+            beyondViewportPageCount = 3,
+            pageSpacing = (-80).dp  // solapamiento para efecto de pila
+        ) { page ->
+            val idx = page % tracks.size
+            val track = tracks[idx]
+            val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
+
+            val scale = 1f - (pageOffset * 0.18f).coerceIn(0f, 0.45f)
+            val alpha = 1f - (pageOffset * 0.35f).coerceIn(0f, 0.7f)
+            val yOffset = (pageOffset * 40).dp
+
+            CoverCard(
+                track = track,
+                isCurrent = page == pagerState.currentPage,
+                isPlaying = state.isPlaying && page == pagerState.currentPage,
+                scale = scale,
+                alpha = alpha,
+                yOffset = yOffset,
+                onTap = {
+                    if (page == pagerState.currentPage) {
+                        state.togglePlay()
+                    }
+                }
+            )
+        }
+
+        // Información inferior
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = 48.dp, start = 28.dp, end = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Datos de audio (oro / plata / gris)
+            AudioFormatLabel(currentTrack, state)
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                currentTrack.title,
+                color = Color.White,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                currentTrack.artist,
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                currentTrack.album,
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(20.dp))
+
+            // Barra de progreso
+            ProgressBar(state)
+
+            // Botones que solo aparecen en pausa
+            AnimatedVisibility(
+                visible = !state.isPlaying,
+                enter = fadeIn(tween(280)) + expandVertically(tween(280)),
+                exit = fadeOut(tween(180)) + shrinkVertically(tween(180))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    PauseActionButton(
+                        label = "Aleatorio",
+                        active = state.shuffle,
+                        onClick = { state.toggleShuffle() }
+                    )
+                    PauseActionButton(
+                        label = "Repetir",
+                        active = state.repeatMode != Player.REPEAT_MODE_OFF,
+                        onClick = { state.cycleRepeat() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoverCard(
+    track: Track,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    scale: Float,
+    alpha: Float,
+    yOffset: Dp,
+    onTap: () -> Unit
+) {
+    val art = rememberArt(track.uri, 800)
+    val info = rememberAudioInfo(track.id, track.mime)
+    val isHiRes = info?.hiRes == true
+
+    val logoAlpha by animateFloatAsState(
+        targetValue = if (isCurrent && isHiRes) 1f else 0f,
+        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        label = "logo"
+    )
+    val logoScale by animateFloatAsState(
+        targetValue = if (isCurrent && isHiRes) 1f else 0.75f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessLow),
+        label = "logoScale"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+                translationY = yOffset.toPx()
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = isCurrent, onClick = onTap)
+    ) {
+        if (art != null) {
+            Image(
+                bitmap = art,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.MusicNote, null, tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(64.dp))
+            }
+        }
+
+        // Logo Hi-Res en la esquina (solo en la portada actual y si es Hi-Res)
+        if (isCurrent && isHiRes) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(12.dp)
+                    .graphicsLayer {
+                        this.alpha = logoAlpha
+                        scaleX = logoScale
+                        scaleY = logoScale
+                    }
+            ) {
+                HiResLogo()
+            }
+        }
+    }
+}
+
+@Composable
+private fun HiResLogo() {
+    // Usa el logo oficial. Coloca hi_res_audio.png en drawable si aún no está.
+    // Mientras tanto se dibuja una aproximación limpia del badge.
+    Box(
+        modifier = Modifier
+            .size(width = 52.dp, height = 36.dp)
+            .background(Color(0xFFFFD700), RoundedCornerShape(4.dp))
+            .border(1.dp, Color.Black.copy(alpha = 0.2f), RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Hi-Res", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black, lineHeight = 10.sp)
+            Text("AUDIO", color = Color.Black, fontSize = 7.sp, fontWeight = FontWeight.Bold, lineHeight = 8.sp)
+        }
+    }
+}
+
+@Composable
+private fun AudioFormatLabel(track: Track, state: PlayerState) {
+    val info = rememberAudioInfo(track.id, track.mime)
+    val live = state.format
+    val displayInfo = if (live != null && live.sampleMimeType != null) {
+        AudioInfo(
+            codecName(live.sampleMimeType),
+            losslessMime(live.sampleMimeType) ?: false,
+            live.sampleRate,
+            info?.bits,
+            live.bitrate
+        )
+    } else info
+
+    val quality = displayInfo?.quality ?: Quality.LOSSY
+    val text = displayInfo?.let { formatLine(it.sampleRate, it.bitrate, it.bits, it.codec, it.lossless) } ?: ""
+
+    val color = when (quality) {
+        Quality.HIRES -> Color(0xFFE6C068)      // oro
+        Quality.LOSSLESS -> Color(0xFFC0C0C0)   // plata
+        Quality.LOSSY -> Color(0xFF8E8E93)      // gris
+    }
+
+    val animate = quality != Quality.LOSSY
+
+    AnimatedVisibility(
+        visible = text.isNotEmpty(),
+        enter = if (animate) fadeIn(tween(400)) + scaleIn(tween(400)) else fadeIn(tween(200)),
+        exit = if (animate) fadeOut(tween(300)) + scaleOut(tween(300)) else fadeOut(tween(150))
+    ) {
+        Text(
+            text.uppercase(),
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.6.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun PauseActionButton(label: String, active: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (active) Color(0xFFFF6A00) else Color(0xFF1C1C1E), label = "btnBg")
+    val fg by animateColorAsState(if (active) Color.Black else Color.White, label = "btnFg")
+
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 10.dp)
+    ) {
+        Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// Barra de progreso (reutiliza la existente o versión simple)
 }
