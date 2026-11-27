@@ -1414,3 +1414,4 @@ private fun PauseActionButton(label: String, active: Boolean, onClick: () -> Uni
 
 // Barra de progreso (reutiliza la existente o versión simple)
 }
+// update
