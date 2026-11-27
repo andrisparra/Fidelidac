@@ -107,6 +107,9 @@ class PlayerState {
         c.play()
     }
 
+    // Saltar a otra pista conservando el estado: si estaba en pausa, sigue en pausa
+    fun jumpTo(i: Int) { controller?.seekToDefaultPosition(i) }
+
     fun skipTo(i: Int) { controller?.let { it.seekToDefaultPosition(i); it.play() } }
     fun removeAt(i: Int) { controller?.removeMediaItem(i) }
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }

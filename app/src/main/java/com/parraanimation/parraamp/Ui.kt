@@ -13,6 +13,21 @@ import android.widget.Toast
 import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.absoluteValue
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -251,11 +266,7 @@ internal fun MiniPlayer(state: PlayerState, onOpen: () -> Unit) {
 // ------------------------------ Reproduciendo ------------------------------
 
 private val PlayerBg = Color(0xFF060606)
-private val SoftGray = Color(0xFF9B9B9B)
 private val InfoGold = Color(0xFFF3D468)
-private val PillFill = Color(0xFF9A6334)
-private val PillBorder = Color(0xFFE8A65C)
-private val PillText = Color(0xFFF6DA83)
 private val BannerOrange = Color(0xFFF0A957)
 private val LogoGold = Color(0xFFD4B14E)
 
@@ -281,13 +292,13 @@ private fun coverEdgeColor(art: ImageBitmap?): Color {
 private fun Modifier.pressable(onClick: () -> Unit): Modifier {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         if (pressed) 0.88f else 1f,
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
         label = "press"
     )
     return this
-        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
 
@@ -327,6 +338,7 @@ private fun NowPlayingScreen(state: PlayerState, onOpenLibrary: () -> Unit) {
 
 @Composable
 private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, favs: Favorites, screenH: Dp) {
+    val scope = rememberCoroutineScope()
     val md = state.item?.mediaMetadata
     val mediaId = state.item?.mediaId ?: ""
     val isFav = mediaId in favs.ids
@@ -337,18 +349,7 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
         AudioInfo(codecName(liveMime), losslessMime(liveMime) ?: false, live.sampleRate, probed?.bits ?: bits, live.bitrate)
     else probed
     val q = info?.quality
-    val premium = q == Quality.HIRES || q == Quality.LOSSLESS
     val hiRes = info?.hiRes == true
-
-    var drag by remember { mutableStateOf<Float?>(null) }
-    val dur = state.durationMs.coerceAtLeast(1L)
-    val frac = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
-    // La barra avanza sin saltos entre actualizaciones; al arrastrar sigue al dedo
-    val animFrac by animateFloatAsState(
-        frac,
-        if (drag != null) snap<Float>() else tween<Float>(260, easing = LinearEasing),
-        label = "frac"
-    )
 
     // Aviso "Disponible en Alta Resolución": aparece unos segundos y se oculta
     var showBanner by remember { mutableStateOf(false) }
@@ -368,104 +369,132 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
     val forward = state.index >= prevIndex
     SideEffect { prevIndex = state.index }
 
-    // Animaciones suaves: color del fondo, acercamiento al reproducir y atenuación al pausar
-    val edge = remember(art) { coverEdgeColor(art) }
-    val bg by animateColorAsState(edge, tween(900), label = "bg")
-    val playZoom by animateFloatAsState(
+    // Estados animados: solo se leen al dibujar, así no se recompone la pantalla en cada fotograma
+    val edge by produceState(Color(0xFF1A1A1A), art) {
+        value = withContext(Dispatchers.Default) { coverEdgeColor(art) }
+    }
+    val bgState = animateColorAsState(edge, tween(900), label = "bg")
+    val zoomState = animateFloatAsState(
         if (state.isPlaying) 1.03f else 1f,
         spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
         label = "zoom"
     )
-    val dim by animateFloatAsState(if (state.isPlaying) 0f else 0.22f, tween(450), label = "dim")
+    val dimState = animateFloatAsState(if (state.isPlaying) 0f else 0.22f, tween(450), label = "dim")
+
+    // Portadas deslizables: la pista actual y sus vecinas
+    val pagerState = rememberPagerState(initialPage = state.index.coerceAtLeast(0)) { maxOf(1, state.queue.size) }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            if (state.queue.isNotEmpty() && page != state.index && page in state.queue.indices) state.jumpTo(page)
+        }
+    }
+    LaunchedEffect(state.index, state.queue.size) {
+        val target = state.index.coerceIn(0, maxOf(0, state.queue.size - 1))
+        if (pagerState.currentPage != target) {
+            if (abs(pagerState.currentPage - target) <= 2) pagerState.animateScrollToPage(target)
+            else pagerState.scrollToPage(target)
+        }
+    }
+
+    // Toque en la portada: pausa o reanuda, con un destello del icono
+    val pulseAlpha = remember { Animatable(0f) }
+    val pulseScale = remember { Animatable(0.8f) }
+    var pulsePlay by remember { mutableStateOf(false) }
+    val onTapCover: () -> Unit = {
+        pulsePlay = !state.isPlaying
+        state.togglePlay()
+        scope.launch {
+            pulseAlpha.snapTo(1f)
+            pulseScale.snapTo(0.8f)
+            launch { pulseScale.animateTo(1.3f, tween(450, easing = FastOutSlowInEasing)) }
+            pulseAlpha.animateTo(0f, tween(450))
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         // Fondo: el color de la portada se oscurece hacia abajo
         Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    0.48f to bg,
-                    0.58f to bg.scaled(0.72f),
-                    0.68f to bg.scaled(0.50f),
-                    0.78f to bg.scaled(0.26f),
-                    0.90f to bg.scaled(0.09f),
-                    1f to Color(0xFF050505)
+            Modifier.fillMaxSize().drawBehind {
+                val c = bgState.value
+                drawRect(
+                    Brush.verticalGradient(
+                        0.48f to c,
+                        0.58f to c.scaled(0.72f),
+                        0.68f to c.scaled(0.50f),
+                        0.78f to c.scaled(0.26f),
+                        0.90f to c.scaled(0.09f),
+                        1f to Color(0xFF050505)
+                    )
                 )
-            )
+            }
         )
 
-        // Portada a todo el ancho, fundida por abajo con el fondo
+        // Portada a todo el ancho: se desliza, y por abajo se funde con el fondo
         Box(
-            Modifier.fillMaxWidth().height(screenH * 0.55f)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                .drawWithContent {
-                    drawContent()
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            0f to Color.Black,
-                            0.60f to Color.Black,
-                            0.88f to Color.Black.copy(alpha = 0.5f),
-                            1f to Color.Transparent
-                        ),
-                        blendMode = BlendMode.DstIn
+            Modifier.fillMaxWidth().height(screenH * 0.55f).drawWithContent {
+                drawContent()
+                val d = dimState.value
+                if (d > 0.001f) drawRect(Color.Black.copy(alpha = d))
+                val c = bgState.value
+                drawRect(
+                    Brush.verticalGradient(
+                        0.60f to c.copy(alpha = 0f),
+                        0.88f to c.copy(alpha = 0.5f),
+                        1f to c.scaled(0.804f)
                     )
-                }
+                )
+            }
         ) {
-            AnimatedContent(
-                targetState = art,
-                modifier = Modifier.fillMaxSize(),
-                transitionSpec = {
-                    (fadeIn(tween(600, easing = FastOutSlowInEasing)) +
-                        slideInHorizontally(tween(600, easing = FastOutSlowInEasing)) { w -> if (forward) w / 8 else -w / 8 }) togetherWith
-                        (fadeOut(tween(600)) +
-                            slideOutHorizontally(tween(600, easing = FastOutSlowInEasing)) { w -> if (forward) -w / 8 else w / 8 })
-                },
-                label = "cover"
-            ) { a ->
-                if (a != null) {
-                    Image(
-                        a, null,
-                        modifier = Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = playZoom
-                            scaleY = playZoom
-                            transformOrigin = TransformOrigin(0.5f, 0f)
-                        },
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.size(96.dp))
-                    }
+            Box(
+                Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = zoomState.value
+                    scaleY = zoomState.value
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                }
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 1
+                ) { page ->
+                    PageCover(state.queue.getOrNull(page), pagerState, page, onTapCover)
                 }
             }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
             Box(
                 Modifier.fillMaxWidth().height(110.dp)
                     .background(Brush.verticalGradient(listOf(Color(0x40000000), Color.Transparent)))
             )
+            // Destello al pausar o reanudar
+            Box(
+                Modifier.align(Alignment.Center).size(76.dp)
+                    .graphicsLayer {
+                        alpha = pulseAlpha.value
+                        scaleX = pulseScale.value
+                        scaleY = pulseScale.value
+                    }
+                    .clip(CircleShape).background(Color.Black.copy(alpha = 0.35f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (pulsePlay) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, null,
+                    tint = Color.White, modifier = Modifier.size(40.dp)
+                )
+            }
         }
 
-        // Información, barra y controles sobre el degradado
+        // Información, barra y botones sobre el degradado
         Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 26.dp),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Etiqueta de calidad (HiRes o Lossless; con pérdida no hay etiqueta)
-            Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) {
-                Crossfade(targetState = q, animationSpec = tween(400), label = "badge") { qq ->
-                    when (qq) {
-                        Quality.HIRES -> QualityPill("HiRes")
-                        Quality.LOSSLESS -> QualityPill("Lossless")
-                        else -> Spacer(Modifier.height(1.dp))
-                    }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            // Datos del archivo
+            // Disco de oro (HiRes) o de plata (calidad CD); con pérdida no hay disco
+            QualityDisc(q, state.isPlaying)
+            Spacer(Modifier.height(2.dp))
             val line = if (info != null) infoLine(info) else ""
             Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
                 Crossfade(targetState = line, animationSpec = tween(400), label = "info") { l ->
                     Text(
-                        l, color = if (premium) InfoGold else Color(0xFFB5B5B5),
+                        l, color = if (hiRes) InfoGold else Color(0xFFBDBDBD),
                         fontSize = 11.sp, fontWeight = FontWeight.Medium
                     )
                 }
@@ -515,33 +544,56 @@ private fun ImmersivePlayer(state: PlayerState, art: ImageBitmap?, bits: Int?, f
                 }
             }
 
-            // Al arrastrar la barra se muestra el tiempo; en reposo no hay números
-            DragTimeLabel(drag != null, "${fmt((frac * dur).toLong())} / ${fmt(state.durationMs)}")
-            SeekBar(animFrac, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+            // Barra de progreso con la llama
+            Spacer(Modifier.height(8.dp))
+            ProgressBar(state)
 
-            // Controles
+            // Aleatorio y repetir, debajo de la barra
             Spacer(Modifier.height(10.dp))
-            Row(
-                Modifier.fillMaxWidth(0.62f),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                 ControlIcon(
-                    Icons.Rounded.Shuffle, 30.dp,
+                    Icons.Outlined.Shuffle, 30.dp,
                     if (state.shuffle) Color.White else Color.White.copy(alpha = 0.6f)
                 ) { state.toggleShuffle() }
-                ControlIcon(Icons.Rounded.FastRewind, 40.dp, Color.White, nudge = -10f) { state.previous() }
-                PlayPause(state.isPlaying) { state.togglePlay() }
-                ControlIcon(Icons.Rounded.FastForward, 40.dp, Color.White, nudge = 10f) { state.next() }
                 ControlIcon(
-                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, 30.dp,
+                    if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat, 30.dp,
                     if (state.repeatMode == Player.REPEAT_MODE_OFF) Color.White.copy(alpha = 0.6f) else Color.White
                 ) { state.cycleRepeat() }
             }
 
             // Aviso de alta resolución
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             HiResBanner(showBanner)
+        }
+    }
+}
+
+// Una portada del carrusel: toque = pausa/reanuda; las vecinas se ven más pequeñas y tenues
+@Composable
+private fun PageCover(item: MediaItem?, pagerState: PagerState, page: Int, onTap: () -> Unit) {
+    val uri = item?.mediaId?.toLongOrNull()?.let { ContentUris.withAppendedId(audioCollection(), it) }
+    val bmp = rememberArt(uri, 1000)
+    val src = remember { MutableInteractionSource() }
+    Box(
+        Modifier.fillMaxSize()
+            .graphicsLayer {
+                val off = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue.coerceIn(0f, 1f)
+                alpha = 1f - 0.35f * off
+                val s = 1f - 0.06f * off
+                scaleX = s
+                scaleY = s
+            }
+            .background(Panel)
+            .clickable(interactionSource = src, indication = null, onClick = onTap)
+    ) {
+        Crossfade(targetState = bmp, animationSpec = tween(300), label = "page") { b ->
+            if (b != null) {
+                Image(b, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.MusicNote, null, tint = Muted, modifier = Modifier.size(96.dp))
+                }
+            }
         }
     }
 }
@@ -553,16 +605,108 @@ private fun infoLine(info: AudioInfo): String {
     return listOf(info.codec.takeIf { it != "—" } ?: "", tail).filter { it.isNotEmpty() }.joinToString(" ")
 }
 
+// ---------------------------- Discos de calidad ----------------------------
+
+// Espacio fijo para que el texto no salte entre canciones. Aparece girando y crece suavemente.
 @Composable
-private fun QualityPill(text: String) {
-    val shape = RoundedCornerShape(6.dp)
-    Text(
-        text, color = PillText, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-        maxLines = 1, softWrap = false,
-        modifier = Modifier.clip(shape).background(PillFill)
-            .border(1.5.dp, PillBorder, shape)
-            .padding(horizontal = 9.dp, vertical = 2.dp)
+private fun QualityDisc(q: Quality?, playing: Boolean) {
+    Box(Modifier.height(46.dp), contentAlignment = Alignment.Center) {
+        AnimatedContent(
+            targetState = q,
+            transitionSpec = {
+                (fadeIn(tween(500)) + scaleIn(initialScale = 0.4f, animationSpec = tween(700, easing = FastOutSlowInEasing))) togetherWith
+                    (fadeOut(tween(300)) + scaleOut(targetScale = 0.6f, animationSpec = tween(300)))
+            },
+            label = "disc"
+        ) { qq ->
+            when (qq) {
+                Quality.HIRES -> SpinningDisc(gold = true, playing = playing)
+                Quality.LOSSLESS -> SpinningDisc(gold = false, playing = playing)
+                else -> Spacer(Modifier.size(1.dp))
+            }
+        }
+    }
+}
+
+// El disco llega girando y sigue girando mientras suena; al pausar frena poco a poco
+@Composable
+private fun SpinningDisc(gold: Boolean, playing: Boolean) {
+    val intro = remember { Animatable(-300f) }
+    val spin = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { intro.animateTo(0f, tween(1000, easing = FastOutSlowInEasing)) }
+    LaunchedEffect(playing) {
+        if (playing) {
+            spin.animateTo(spin.value + 40f, tween(800, easing = FastOutLinearInEasing))
+            while (true) {
+                spin.snapTo(spin.value % 360f)
+                spin.animateTo(spin.value + 360f, tween(4500, easing = LinearEasing))
+            }
+        } else {
+            spin.animateTo(spin.value + 70f, tween(900, easing = FastOutSlowInEasing))
+        }
+    }
+    Box(Modifier.size(44.dp)) {
+        Canvas(
+            Modifier.fillMaxSize().graphicsLayer {
+                rotationZ = intro.value + spin.value
+                compositingStrategy = CompositingStrategy.Offscreen
+            }
+        ) { drawDisc(gold) }
+        // Brillo fijo: no gira con el disco, como la luz sobre un CD de verdad
+        Canvas(Modifier.fillMaxSize()) { drawGloss() }
+    }
+}
+
+private fun DrawScope.drawDisc(gold: Boolean) {
+    val c = center
+    val r = size.minDimension / 2f
+    val sheen = if (gold) {
+        listOf(0xFFFFF3C4, 0xFFE0AE45, 0xFFFFE699, 0xFFB5842A, 0xFFFFF3C4, 0xFFEBBE5C, 0xFFFFF8D8, 0xFFC1953A, 0xFFFFF3C4)
+    } else {
+        listOf(0xFFF6F8FA, 0xFFA6ACB3, 0xFFEAEEF1, 0xFF8A9199, 0xFFF6F8FA, 0xFFB4BAC1, 0xFFFFFFFF, 0xFF979EA5, 0xFFF6F8FA)
+    }
+    drawCircle(brush = Brush.sweepGradient(sheen.map { Color(it) }, center = c), radius = r, center = c)
+    // reflejo de arcoíris muy tenue
+    drawCircle(
+        brush = Brush.sweepGradient(
+            listOf(Color(0x33FF6B9A), Color(0x3300D4FF), Color(0x33FFE600), Color(0x33A06BFF), Color(0x33FF6B9A)),
+            center = c
+        ),
+        radius = r * 0.92f, center = c
     )
+    // pistas
+    drawCircle(Color(0x30000000), radius = r * 0.98f, center = c, style = Stroke(1.dp.toPx()))
+    drawCircle(Color(0x18000000), radius = r * 0.62f, center = c, style = Stroke(1.dp.toPx()))
+    drawCircle(Color(0x22FFFFFF), radius = r * 0.46f, center = c, style = Stroke(1.dp.toPx()))
+    // cubo central y agujero
+    drawCircle(if (gold) Color(0xFFF2DC9A) else Color(0xFFE9ECEF), radius = r * 0.30f, center = c)
+    drawCircle(Color(0x40000000), radius = r * 0.30f, center = c, style = Stroke(1.dp.toPx()))
+    drawCircle(Color.Black, radius = r * 0.11f, center = c, blendMode = BlendMode.Clear)
+}
+
+private fun DrawScope.drawGloss() {
+    drawArc(Color.White.copy(alpha = 0.20f), startAngle = -75f, sweepAngle = 26f, useCenter = true)
+    drawArc(Color.White.copy(alpha = 0.12f), startAngle = 105f, sweepAngle = 26f, useCenter = true)
+}
+
+// ---------------------------- Barra con llama ----------------------------
+
+// Solo esta función se actualiza con la posición; el resto de la pantalla no se recompone
+@Composable
+private fun ProgressBar(state: PlayerState) {
+    var drag by remember { mutableStateOf<Float?>(null) }
+    val dur = state.durationMs.coerceAtLeast(1L)
+    val target = (drag ?: (state.positionMs.toFloat() / dur)).coerceIn(0f, 1f)
+    val frac = animateFloatAsState(
+        target,
+        if (drag != null) snap<Float>() else tween<Float>(260, easing = LinearEasing),
+        label = "frac"
+    )
+    val intensity = animateFloatAsState(if (state.isPlaying) 1f else 0.35f, tween(500), label = "flameIntensity")
+    Column(Modifier.fillMaxWidth()) {
+        DragTimeLabel(drag != null, "${fmt((target * dur).toLong())} / ${fmt(state.durationMs)}")
+        ProgressTrack(frac, intensity, onDrag = { drag = it }, onSeek = { state.seekToFraction(it) })
+    }
 }
 
 // Tiempo que aparece solo mientras se arrastra la barra
@@ -574,6 +718,88 @@ private fun DragTimeLabel(visible: Boolean, text: String) {
         }
     }
 }
+
+private fun seekFraction(x: Float, width: Int, pad: Float): Float =
+    if (width <= 2 * pad) 0f else ((x - pad) / (width - 2 * pad)).coerceIn(0f, 1f)
+
+@Composable
+private fun ProgressTrack(
+    frac: State<Float>, intensity: State<Float>,
+    onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit
+) {
+    var trackW by remember { mutableIntStateOf(0) }
+    Box(Modifier.fillMaxWidth().padding(horizontal = 50.dp).height(24.dp).onSizeChanged { trackW = it.width }) {
+        Canvas(
+            Modifier.fillMaxSize()
+                .pointerInput(Unit) {
+                    val pad = 8.dp.toPx()
+                    detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
+                }
+                .pointerInput(Unit) {
+                    val pad = 8.dp.toPx()
+                    var last = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
+                        onDragEnd = { onSeek(last); onDrag(null) },
+                        onDragCancel = { onDrag(null) },
+                        onHorizontalDrag = { change, _ ->
+                            last = seekFraction(change.position.x, size.width, pad)
+                            onDrag(last)
+                        }
+                    )
+                }
+        ) {
+            val pad = 8.dp.toPx()
+            val w = size.width - 2 * pad
+            val y = size.height / 2
+            val x = pad + w * frac.value
+            drawLine(Color(0xFF6B7078), Offset(pad, y), Offset(pad + w, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+            // resplandor de la llama
+            val glow = 18.dp.toPx()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(Color(0x66FF9A2E).copy(alpha = 0.40f * intensity.value), Color.Transparent),
+                    center = Offset(x, y), radius = glow
+                ),
+                radius = glow, center = Offset(x, y)
+            )
+        }
+        Flame(
+            intensity,
+            Modifier.offset {
+                val pad = 8.dp.roundToPx()
+                val fx = pad + (trackW - 2 * pad) * frac.value
+                IntOffset((fx - 16.dp.toPx()).roundToInt(), (-16).dp.roundToPx())
+            }
+        )
+    }
+}
+
+// Llama animada: parpadea, se mece y se eleva un poco; al pausar se calma
+@Composable
+private fun Flame(intensity: State<Float>, modifier: Modifier = Modifier) {
+    val inf = rememberInfiniteTransition(label = "flame")
+    val flick = inf.animateFloat(0.90f, 1.12f, infiniteRepeatable(tween(360, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "flick")
+    val sway = inf.animateFloat(-5f, 5f, infiniteRepeatable(tween(640, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway")
+    val lift = inf.animateFloat(0f, 1f, infiniteRepeatable(tween(250, easing = LinearEasing), RepeatMode.Reverse), label = "lift")
+    Box(
+        modifier.size(32.dp).graphicsLayer {
+            val k = intensity.value
+            val f = 1f + (flick.value - 1f) * k
+            scaleX = 1f + (f - 1f) * 0.5f
+            scaleY = f * (0.8f + 0.2f * k)
+            rotationZ = sway.value * k
+            translationY = -lift.value * 1.5.dp.toPx() * k
+            transformOrigin = TransformOrigin(0.5f, 1f)
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        Text("🔥", fontSize = 24.sp)
+    }
+}
+
+// ---------------------------- Piezas pequeñas ----------------------------
 
 // Aviso que entra desde abajo con un fundido y un leve zoom, y se retira solo
 @Composable
@@ -601,86 +827,11 @@ private fun HiResBanner(visible: Boolean) {
     }
 }
 
-// Icono de control sin marco. Los de anterior y siguiente dan un pequeño empujón al tocarlos.
+// Icono de control sin marco, con rebote al tocarlo
 @Composable
-private fun ControlIcon(icon: ImageVector, size: Dp, tint: Color, nudge: Float = 0f, onClick: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val density = LocalDensity.current.density
-    val offset = remember { Animatable(0f) }
-    Box(
-        Modifier.size(48.dp).pressable {
-            onClick()
-            if (nudge != 0f) {
-                scope.launch {
-                    offset.animateTo(nudge * density, tween(110))
-                    offset.animateTo(0f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
-                }
-            }
-        },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(size).graphicsLayer { translationX = offset.value })
-    }
-}
-
-// Pausa y reproducir: el icono cambia con un fundido y un pequeño zoom
-@Composable
-private fun PlayPause(playing: Boolean, onClick: () -> Unit) {
-    Box(Modifier.size(56.dp).pressable(onClick), contentAlignment = Alignment.Center) {
-        AnimatedContent(
-            targetState = playing,
-            transitionSpec = {
-                (fadeIn(tween(260)) + scaleIn(initialScale = 0.5f, animationSpec = tween(260, easing = FastOutSlowInEasing))) togetherWith
-                    (fadeOut(tween(160)) + scaleOut(targetScale = 0.5f, animationSpec = tween(160)))
-            },
-            label = "playpause"
-        ) { p ->
-            if (p) {
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    repeat(2) {
-                        Box(Modifier.size(width = 8.dp, height = 28.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
-                    }
-                }
-            } else {
-                Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(48.dp))
-            }
-        }
-    }
-}
-
-private fun seekFraction(x: Float, width: Int, pad: Float): Float =
-    if (width <= 2 * pad) 0f else ((x - pad) / (width - 2 * pad)).coerceIn(0f, 1f)
-
-// Barra gruesa y redondeada, como en la captura
-@Composable
-private fun SeekBar(frac: Float, onDrag: (Float?) -> Unit, onSeek: (Float) -> Unit) {
-    Canvas(
-        Modifier.fillMaxWidth().padding(horizontal = 50.dp).height(24.dp)
-            .pointerInput(Unit) {
-                val pad = 8.dp.toPx()
-                detectTapGestures { o -> onSeek(seekFraction(o.x, size.width, pad)) }
-            }
-            .pointerInput(Unit) {
-                val pad = 8.dp.toPx()
-                var last = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { o -> last = seekFraction(o.x, size.width, pad); onDrag(last) },
-                    onDragEnd = { onSeek(last); onDrag(null) },
-                    onDragCancel = { onDrag(null) },
-                    onHorizontalDrag = { change, _ ->
-                        last = seekFraction(change.position.x, size.width, pad)
-                        onDrag(last)
-                    }
-                )
-            }
-    ) {
-        val pad = 8.dp.toPx()
-        val w = size.width - 2 * pad
-        val y = size.height / 2
-        val x = pad + w * frac
-        drawLine(Color(0xFF6B7078), Offset(pad, y), Offset(pad + w, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(pad, y), Offset(x, y), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
-        drawCircle(Color.White, radius = 7.dp.toPx(), center = Offset(x, y))
+private fun ControlIcon(icon: ImageVector, size: Dp, tint: Color, onClick: () -> Unit) {
+    Box(Modifier.size(48.dp).pressable(onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(size))
     }
 }
 
@@ -885,7 +1036,9 @@ private fun BadgePill(text: String, size: TextUnit) {
     )
 }
 
-private val artCache = LruCache<String, ImageBitmap>(80)
+private val artCache = object : LruCache<String, ImageBitmap>(48 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
+}
 
 @Composable
 private fun rememberArt(uri: Uri?, px: Int): ImageBitmap? {
@@ -896,7 +1049,7 @@ private fun rememberArt(uri: Uri?, px: Int): ImageBitmap? {
             val cached = artCache.get(key)
             if (cached != null) cached else {
                 val loaded = withContext(Dispatchers.IO) { loadArt(ctx, uri, px) }
-                if (loaded != null && px <= 256) artCache.put(key, loaded)
+                if (loaded != null) artCache.put(key, loaded)
                 loaded
             }
         }
