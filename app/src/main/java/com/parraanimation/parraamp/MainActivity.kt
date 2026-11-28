@@ -31,6 +31,8 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT)
         )
+        // Pide la frecuencia de pantalla más alta (120 Hz si el teléfono la tiene) para animaciones más fluidas
+        window.attributes = window.attributes.also { it.preferredRefreshRate = 120f }
         FidelidacFx.init(this)
         state.connect(this)
         setContent {
